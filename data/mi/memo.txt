@@ -1,0 +1,14 @@
+mi_dict_ad.pickle
+- number of variables: 60
+
+mi_dict_dis.pickle
+- number of variables: 60
+
+mi_dict_static.pickle
+- number of variables: 60
+This is for A3TGCN. A3TGCN assumes static edge index.
+The average of MI in admission and discharge.
+
+mi_dict.pickle
+- number of variables: 73
+72 variables + LOS
