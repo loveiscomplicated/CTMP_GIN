@@ -15,7 +15,7 @@ import torch
 import pandas as pd
 
 from torch.utils.data import Dataset, DataLoader
-from data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims
+from .data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims
 
 CURDIR = os.path.dirname(__file__)
 
