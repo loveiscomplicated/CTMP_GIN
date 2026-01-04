@@ -101,6 +101,12 @@ class TEDSTensorDataset(Dataset):
         # missing value 
         df = tackle_missing_value_main(self.raw_data_path, self.missing_corrected_path)
 
+        # remove unused variables
+        # 1. CASEID -> ID of the cases.
+        # 2. DISYR -> same in all cases.
+        # These two things aren't needed in training model.
+        df = df.drop(['DISYR', 'CASEID'], axis=1)
+
         # get los
         if 'LOS' in df.columns:
             LOS = df['LOS']
@@ -121,6 +127,7 @@ class TEDSTensorDataset(Dataset):
             columns = list(df.columns)
             columns.remove('REASON')
             columns.append('REASON')
+            df = df[columns]
             
         # To use torch.Embedding, organizing label as successive integers is needed.
         df = organize_labels(df)
@@ -137,35 +144,51 @@ class TEDSTensorDataset(Dataset):
             df = df.drop("REASON", axis=1)
             col_info = get_col_info(df)
 
-        # The type of LOS is pd.Series
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         return df_tensor, col_info, LOS # -> self.process하면 tuple로 반환될 것
     
+    
 class TEDSDatasetForGIN(Dataset):
-    def __init__(self, root):
+    def __init__(self, root, binary=True):
         super().__init__()
+        self.binary = binary
+
         self.root = root
-        self.raw_dir = os.path.join(root, "raw")
-        if not os.path.exists(self.raw_dir):
-            os.mkdir(self.raw_dir)
+        self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
+        self.missing_corrected_path = os.path.join(self.root, 'raw', 'missing_corrected.csv')
 
-        self.process_dir = os.path.join(root, 'process')
-        if not os.path.exists(self.process_dir):
-            os.mkdir(self.process_dir)
+        df = tackle_missing_value_main(self.raw_data_path, self.missing_corrected_path)
 
-        data_path = os.path.join(self.raw_dir, 'missing_corrected.csv')
-        df = pd.read_csv(data_path)
+        # remove unused variables
+        # 1. CASEID -> ID of the cases.
+        # 2. DISYR -> same in all cases.
+        # These two things aren't needed in training model.
+        df = df.drop(['DISYR', 'CASEID'], axis=1)
         
-        if 'REASONb' not in df.columns:
-            raise ValueError('raw data에서 REASONb 데이터를 찾을 수 없습니다.')
+        if 'REASON' not in df.columns:
+            raise ValueError('no \"REASON\" variable in the raw data.')
         
+        if self.binary:
+            df = make_binary(df)
+        else:
+            columns = list(df.columns)
+            columns.remove('REASON')
+            columns.append('REASON')
+            df = df[columns]
+
         # label_organize
         df = organize_labels(df)
 
+        # make pd.DataFrame into torch.Tensor.
         self.df_tensor = df_to_tensor(df)
-        df = df.drop("REASONb", axis=1)
-        self.col_dims = get_col_dims(df)
-    
+
+        if self.binary:
+            df = df.drop("REASONb", axis=1)
+            self.col_dims = get_col_dims(df)
+        else:
+            df = df.drop("REASON", axis=1)
+            self.col_dims = get_col_dims(df)
+
     def __getitem__(self, index):
         x = self.df_tensor[index, :-1]
         y = self.df_tensor[index, -1]
