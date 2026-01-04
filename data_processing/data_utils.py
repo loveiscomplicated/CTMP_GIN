@@ -1,5 +1,11 @@
 import torch
+import numpy as np
 import pandas as pd
+
+def make_binary(df):
+    df['REASONb'] = np.where(df['REASON'] == 1, 1, 0)
+    df = df.drop(['REASON'], axis=1)
+    return df
 
 def get_col_dims(df: pd.DataFrame):
     '''
