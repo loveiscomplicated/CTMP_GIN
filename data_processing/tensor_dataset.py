@@ -15,7 +15,8 @@ import torch
 import pandas as pd
 
 from torch.utils.data import Dataset, DataLoader
-from .data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims
+from .data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims, make_binary
+from .tackle_missing_value import tackle_missing_value_main
 
 CURDIR = os.path.dirname(__file__)
 
@@ -36,7 +37,7 @@ class TEDSTensorDataset(Dataset):
                                                 (입소 시점 컬럼 인덱스 리스트, 퇴소 시점 컬럼 인덱스 리스트)
         LOS (pandas.Series): Length of Stay (재원 일수) 정보.
     """
-    def __init__(self, root):
+    def __init__(self, root:str, binary=True):
         """
         TEDSTensorDataset의 생성자.
 
@@ -45,31 +46,16 @@ class TEDSTensorDataset(Dataset):
 
         Args:
             root: 데이터가 위치할 루트 디렉토리 경로.
+            binary: REASON을 REASONb로 변환할 것인지 여부.
         """
         super().__init__()
+        self.binary = binary
+
         self.root = root
-        self.raw_dir = os.path.join(root, "raw")
-        if not os.path.exists(self.raw_dir):
-            os.mkdir(self.raw_dir)
+        self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
+        self.missing_corrected_path = os.path.join(self.root, 'raw', 'missing_corrected.csv')
 
-        self.process_dir = os.path.join(root, 'process')
-        if not os.path.exists(self.process_dir):
-            os.mkdir(self.process_dir)
-
-        processed_data_path = os.path.join(self.process_dir, "processed_data.pt")
-        if os.path.exists(processed_data_path):
-            print("저장되어 있는 전처리된 데이터가 있습니다. 해당 데이터를 불러오는 중..")
-            self.processed_tensor, self.col_info, self.LOS = torch.load(processed_data_path, weights_only=False)
-            print("불러오기 완료")
-        else:
-            print("저장되어 있는 전처리된 데이터가 없으므로, 전처리 과정을 진행합니다. 전처리된 데이터는 저장됩니다.")
-            print(f"저장 경로: {processed_data_path}")
-            processed_data = self.process
-            print("전처리 완료")
-            self.processed_tensor, self.col_info, self.LOS = processed_data
-            print("불러오기 완료")
-            torch.save(processed_data, processed_data_path)
-            print("전처리된 데이터 저장 완료")
+        self.processed_tensor, self.col_info, self.LOS = self.process()
 
     def __getitem__(self, index):
         """
@@ -95,7 +81,6 @@ class TEDSTensorDataset(Dataset):
         """
         return self.processed_tensor.shape[0]
     
-    @property
     def process(self):
         """
         원본 데이터를 읽고 전처리 과정을 수행합니다.
@@ -113,34 +98,47 @@ class TEDSTensorDataset(Dataset):
         Returns:
             (df_tensor, col_info, LOS): 전처리된 데이터 튜플.
         """
-        data_path = os.path.join(self.raw_dir, 'missing_corrected.csv')
-        df = pd.read_csv(data_path)
+        # missing value 
+        df = tackle_missing_value_main(self.raw_data_path, self.missing_corrected_path)
 
-        # los 따로 빼기
+        # get los
         if 'LOS' in df.columns:
             LOS = df['LOS']
             LOS = df_to_tensor(LOS)
             df = df.drop('LOS', axis=1)
         else:
-            raise ValueError('raw data에서 LOS 데이터를 찾을 수 없습니다.')
+            raise ValueError('No LOS variable in the raw data.')
         
-        if 'REASONb' not in df.columns:
-            raise ValueError('raw data에서 REASONb 데이터를 찾을 수 없습니다.')
+        # Prepare REASON or REASONb
+        if 'REASON' not in df.columns:
+            raise ValueError('No REASON variable in the raw data.')
         
-        # label_organize
+        if self.binary:
+            df = make_binary(df)
+        else:
+            # rearrange the position of REASON column to easily get the y item like this:
+            # ```y_label = self.processed_tensor[index, -1]```
+            columns = list(df.columns)
+            columns.remove('REASON')
+            columns.append('REASON')
+            
+        # To use torch.Embedding, organizing label as successive integers is needed.
         df = organize_labels(df)
         
-        # df to tensor
+        # make pd.DataFrame into torch.Tensor.
         df_tensor = df_to_tensor(df)
         
         # get col infos, list of (col_list, col_dims, ad_col_index, dis_col_index)
-        # ad_col_index, dis_col_index는 다음과 같음 integer position of admission col, discharge col
-        df = df.drop("REASONb", axis=1)
-        col_info = get_col_info(df)
+        # ad_col_index, dis_col_index: integer position of admission col, discharge col
+        if self.binary:
+            df = df.drop("REASONb", axis=1)
+            col_info = get_col_info(df)
+        else:
+            df = df.drop("REASON", axis=1)
+            col_info = get_col_info(df)
 
-        # processed_data는 (tensor, col_info, LOS)형태 
-        # LOS는 pd.Series임
-        # col_info는 다음과 같음 (col_list, col_dims, ad_col_index, dis_col_index)
+        # The type of LOS is pd.Series
+        # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         return df_tensor, col_info, LOS # -> self.process하면 tuple로 반환될 것
     
 class TEDSDatasetForGIN(Dataset):
