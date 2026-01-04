@@ -1,6 +1,7 @@
-import torch
 import numpy as np
 import pandas as pd
+import torch
+from torch.utils.data import DataLoader, Subset
 
 def make_binary(df):
     df['REASONb'] = np.where(df['REASON'] == 1, 1, 0)
@@ -97,3 +98,63 @@ def organize_labels(df: pd.DataFrame):
 def df_to_tensor(df: pd.DataFrame | pd.Series, dtype=torch.long):
     df_np = df.to_numpy()
     return torch.tensor(df_np, dtype=dtype)
+
+def train_test_split_stratified(dataset, batch_size,
+                              ratio=[0.7, 0.15, 0.15],
+                              seed=42,
+                              num_workers=0):
+
+    assert abs(sum(ratio) - 1.0) < 1e-6, "ratio must sum to 1.0"
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    # 전체 인덱스 & 라벨 추출
+    labels = np.array([dataset[i][1] for i in range(len(dataset))])
+    indices = np.arange(len(dataset))
+
+    unique_labels = np.unique(labels)
+
+    train_idx = []
+    val_idx = []
+    test_idx = []
+
+    # --- Stratified Split ---
+    for ul in unique_labels:
+        cls_idx = indices[labels == ul]
+        np.random.shuffle(cls_idx)
+
+        n_total = len(cls_idx)
+        n_train = int(n_total * ratio[0])
+        n_val = int(n_total * ratio[1])
+        # 남은 건 test
+        n_test = n_total - n_train - n_val
+
+        # 분할
+        train_idx.extend(cls_idx[:n_train])
+        val_idx.extend(cls_idx[n_train:n_train + n_val])
+        test_idx.extend(cls_idx[n_train + n_val:])
+
+    # 셔플 (선택)
+    np.random.shuffle(train_idx)
+    np.random.shuffle(val_idx)
+    np.random.shuffle(test_idx)
+
+    # Subset dataset 생성
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    test_dataset = Subset(dataset, test_idx)
+
+    print(f"Train Set Size: {len(train_dataset)}")
+    print(f"Valid Set Size: {len(val_dataset)}")
+    print(f"Test Set Size: {len(test_dataset)}")
+
+    # DataLoader 생성
+    # drop_last=True를 해야 마지막 자투리 배치를 위해 따로 배치 엣지 인덱스를 만들 필요가 없음
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size,
+                                  shuffle=True, num_workers=num_workers, drop_last=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size,
+                                shuffle=False, num_workers=num_workers, drop_last=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size,
+                                 shuffle=False, num_workers=num_workers, drop_last=True)
+
+    return train_dataloader, val_dataloader, test_dataloader
