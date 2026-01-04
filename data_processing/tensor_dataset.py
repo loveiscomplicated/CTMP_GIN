@@ -54,7 +54,7 @@ class TEDSTensorDataset(Dataset):
         self.root = root
         self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
         self.missing_corrected_path = os.path.join(self.root, 'raw', 'missing_corrected.csv')
-
+        self.raw_data = pd.read_csv(self.raw_data_path)
         self.processed_tensor, self.col_info, self.LOS = self.process()
 
     def __getitem__(self, index):
@@ -164,7 +164,7 @@ class TEDSDatasetForGIN(Dataset):
         # 2. DISYR -> same in all cases.
         # These two things aren't needed in training model.
         df = df.drop(['DISYR', 'CASEID'], axis=1)
-        
+
         if 'REASON' not in df.columns:
             raise ValueError('no \"REASON\" variable in the raw data.')
         

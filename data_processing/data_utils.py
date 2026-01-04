@@ -157,4 +157,4 @@ def train_test_split_stratified(dataset, batch_size,
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size,
                                  shuffle=False, num_workers=num_workers, drop_last=True)
 
-    return train_dataloader, val_dataloader, test_dataloader
+    return train_dataloader, val_dataloader, test_dataloader, train_idx
