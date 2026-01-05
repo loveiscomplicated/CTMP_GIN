@@ -1,8 +1,6 @@
 import os
 import pandas as pd
 
-
-
 def fill_not_applicable(df: pd.DataFrame):
     ''' 
     Certain variables are inherently associated with high missing rates,
