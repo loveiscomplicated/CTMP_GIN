@@ -54,7 +54,7 @@ class TEDSTensorDataset(Dataset):
         self.root = root
         self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
         self.missing_corrected_path = os.path.join(self.root, 'raw', 'missing_corrected.csv')
-        self.raw_data = pd.read_csv(self.raw_data_path)
+        
         self.processed_tensor, self.col_info, self.LOS = self.process()
 
     def __getitem__(self, index):
@@ -131,7 +131,7 @@ class TEDSTensorDataset(Dataset):
             
         # To use torch.Embedding, organizing label as successive integers is needed.
         df = organize_labels(df)
-        
+        self.processed_df = df
         # make pd.DataFrame into torch.Tensor.
         df_tensor = df_to_tensor(df)
         
@@ -178,7 +178,8 @@ class TEDSDatasetForGIN(Dataset):
 
         # label_organize
         df = organize_labels(df)
-
+        self.processed_df = df
+        
         # make pd.DataFrame into torch.Tensor.
         self.df_tensor = df_to_tensor(df)
 
