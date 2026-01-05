@@ -6,14 +6,15 @@ from sklearn.feature_selection import mutual_info_classif
 from .data_utils import get_ad_dis_col
 
 def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
-    mi_ad_dict_path = os.path.join(root, f"mi_ad_dict_{seed}.pickle")
-    mi_dis_dict_path = os.path.join(root, f"mi_dis_dict_{seed}.pickle")
-    mi_avg_dict_path = os.path.join(root, f"mi_avg_dict_{seed}.pickle")
+    mi_ad_dict_path = os.path.join(root, 'mi', f"mi_ad_dict_{seed}.pickle")
+    mi_dis_dict_path = os.path.join(root, 'mi', f"mi_dis_dict_{seed}.pickle")
+    mi_avg_dict_path = os.path.join(root, 'mi', f"mi_avg_dict_{seed}.pickle")
     
     if os.path.exists(mi_ad_dict_path):
         with open(mi_ad_dict_path, 'rb') as f:
             mi_ad_dict = pickle.load(f)
     else:
+        os.mkdir(mi_ad_dict_path)
         mi_ad_dict = get_mi_dict(train_df=train_df,
                                  seed=seed,
                                  mode='ad',
@@ -24,6 +25,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
         with open(mi_dis_dict_path, 'rb') as f:
             mi_dis_dict = pickle.load(f)
     else:
+        os.mkdir(mi_dis_dict_path)
         mi_dis_dict = get_mi_dict(train_df=train_df,
                                   seed=seed,
                                   mode='dis',
@@ -34,6 +36,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
         with open(mi_avg_dict_path, 'rb') as f:
             mi_avg_dict = pickle.load(f)
     else:
+        os.mkdir(mi_avg_dict_path)
         mi_avg_dict = get_mi_avg_dict(mi_ad_dict=mi_ad_dict, # type: ignore
                                       mi_dis_dict=mi_dis_dict, # type: ignore
                                       root=root,
@@ -42,17 +45,26 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
     return mi_ad_dict, mi_dis_dict, mi_avg_dict
 
 def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
+    '''df: df_ad | df_dis'''
     mi_dict = {}
     for col in tqdm(df.columns):
         x = df.drop(col, axis=1)
         y = df[col]
         mi = mutual_info_classif(x, y, discrete_features=True, n_neighbors=n_neighbors, random_state=seed)
         mi_dict[col] = mi
-    return mi_dict
+
+    mi_dict_final = {}
+    for col in df.columns:
+        x_col = df.drop(col, axis=1)
+        x_col = x_col.columns
+        mi_series = pd.Series(mi_dict[col], index=x_col)
+        mi_series = mi_series.sort_values(ascending=False)
+        mi_dict_final[col] = mi_series
+    return mi_dict_final
 
 def get_mi_dict(train_df: pd.DataFrame, seed: int, mode: str, root:str, n_neighbors=3):
-    mi_ad_dict_path = os.path.join(root, f"mi_ad_dict_{seed}.pickle")
-    mi_dis_dict_path = os.path.join(root, f"mi_dis_dict_{seed}.pickle")
+    mi_ad_dict_path = os.path.join(root, 'mi', f"mi_ad_dict_{seed}.pickle")
+    mi_dis_dict_path = os.path.join(root, 'mi', f"mi_dis_dict_{seed}.pickle")
 
     ad, dis = get_ad_dis_col(train_df)
     df_ad = train_df[ad]
@@ -79,7 +91,7 @@ def get_mi_dict(train_df: pd.DataFrame, seed: int, mode: str, root:str, n_neighb
 def get_mi_avg_dict(mi_ad_dict: dict, mi_dis_dict: dict, root: str, seed: int):
     print("Averaging the results to get mi_avg_dict...")
 
-    mi_avg_dict_path = os.path.join(root, f"mi_avg_dict_{seed}.pickle")
+    mi_avg_dict_path = os.path.join(root, 'mi', f"mi_avg_dict_{seed}.pickle")
 
     dis_keys_list = list(mi_dis_dict.keys())
     mi_avg_dict = {}
