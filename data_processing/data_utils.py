@@ -15,7 +15,7 @@ def get_col_dims(df: pd.DataFrame):
     col_dims = [len(df[col].unique()) for col in df.columns]
     return col_dims
 
-def get_ad_dis_col(df:pd.DataFrame, remove_los=True):
+def get_ad_dis_col(df:pd.DataFrame, remove_los=False):
     '''
     admission 시의 컬럼, discharge 시의 컬럼을 나누어 리턴
     Args:
@@ -30,6 +30,9 @@ def get_ad_dis_col(df:pd.DataFrame, remove_los=True):
 
     if 'REASONb' in cols:
         cols.remove('REASONb')
+
+    if 'REASON' in cols:
+        cols.remove('REASON')
 
     change = []
     change_D = []

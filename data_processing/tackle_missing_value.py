@@ -60,4 +60,9 @@ def tackle_missing_value_main(raw_df_path: str, missing_corrected_path: str):
     if os.path.exists(missing_corrected_path):
         missing_corrected = pd.read_csv(missing_corrected_path)
         return missing_corrected
-    return tackle_missing_value(raw_df_path)
+    
+    df = tackle_missing_value(raw_df_path)
+    
+    os.makedirs(os.path.dirname(missing_corrected_path) or ".", exist_ok=True)
+    df.to_csv(missing_corrected_path, index=False)
+    return df
