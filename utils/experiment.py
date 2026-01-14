@@ -1,0 +1,198 @@
+import os
+import sys
+import json
+import yaml
+import time
+import subprocess
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
+
+import torch
+
+
+def _now_run_id() -> str:
+    return time.strftime("%Y%m%d-%H%M%S")
+
+
+def _format_float(x: Any) -> str:
+    try:
+        return f"{float(x):.2e}"
+    except Exception:
+        return str(x)
+
+
+def make_run_id(cfg: Dict[str, Any]) -> str:
+    """
+    Example:
+    20260112-174200__ctmp_gin__bs=512__lr=5e-4__seed=42
+    """
+    ts = _now_run_id()
+    model = cfg.get("model", {}).get("name", "model")
+
+    train = cfg.get("train", {})
+    bs = train.get("batch_size", "NA")
+    lr = train.get("lr", "NA")
+    seed = train.get("seed", "NA")
+
+    parts = [
+        ts,
+        model,
+        f"bs={bs}",
+        f"lr={_format_float(lr)}",
+        f"seed={seed}",
+    ]
+    return "__".join(map(str, parts))
+
+
+def ensure_run_dir(base_dir: str, run_id: str) -> str:
+    run_dir = os.path.join(base_dir, run_id)
+    os.makedirs(run_dir, exist_ok=False)  # fail if collision
+    os.makedirs(os.path.join(run_dir, "checkpoints"), exist_ok=True)
+    return run_dir
+
+
+def _get_git_info() -> str:
+    """
+    Return a text blob with git commit + dirty status, if available.
+    """
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.STDOUT
+        ).decode().strip()
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain"], stderr=subprocess.STDOUT
+        ).decode().strip()
+        dirty = "dirty" if status else "clean"
+        return f"commit: {commit}\nstatus: {dirty}\n\nporcelain:\n{status}\n"
+    except Exception as e:
+        return f"git info unavailable: {e}\n"
+
+
+def _get_command_line() -> str:
+    return " ".join([sys.executable] + sys.argv)
+
+
+def save_text(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def save_yaml(path: str, obj: Dict[str, Any]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(obj, f, sort_keys=False, allow_unicode=True)
+
+
+def append_jsonl(path: str, record: Dict[str, Any]) -> None:
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+@dataclass
+class CheckpointPolicy:
+    save_ckpt: bool = True
+    save_every: int = 1          # save every N epochs (0 or <0 disables periodic saving)
+    save_best: bool = True       # save best checkpoint
+    monitor: str = "valid_loss"  # metric name to monitor
+    mode: str = "min"            # "min" for loss, "max" for auc/f1
+    keep_last: bool = True       # keep "last.pt"
+
+
+class ExperimentLogger:
+    """
+    - Creates run directory + basic artifacts:
+      config.final.yaml, command.txt, git.txt, metrics.jsonl
+    - Optional checkpoint saving (on/off via policy)
+    """
+
+    def __init__(self, cfg: Dict[str, Any], run_dir: str):
+        self.cfg = cfg
+        self.run_dir = run_dir
+        self.metrics_path = os.path.join(run_dir, "metrics.jsonl")
+        self.ckpt_dir = os.path.join(run_dir, "checkpoints")
+
+        train_cfg = cfg.get("train", {})
+        self.policy = CheckpointPolicy(
+            save_ckpt=bool(train_cfg.get("save_ckpt", True)),
+            save_every=int(train_cfg.get("save_every", 1)),
+            save_best=bool(train_cfg.get("save_best", True)),
+            monitor=str(train_cfg.get("monitor", "valid_loss")),
+            mode=str(train_cfg.get("mode", "min")).lower(),
+            keep_last=bool(train_cfg.get("keep_last", True)),
+        )
+
+        self.best_value: Optional[float] = None
+        self.best_epoch: Optional[int] = None
+
+        # Save run artifacts immediately (so even if training crashes, we still have config)
+        save_yaml(os.path.join(run_dir, "config.final.yaml"), cfg)
+        save_text(os.path.join(run_dir, "command.txt"), _get_command_line() + "\n")
+        save_text(os.path.join(run_dir, "git.txt"), _get_git_info())
+
+    def log_metrics(self, epoch: int, metrics: Dict[str, Any]) -> None:
+        record = {"epoch": epoch, **metrics}
+        append_jsonl(self.metrics_path, record)
+
+    def _is_better(self, value: float) -> bool:
+        if self.best_value is None:
+            return True
+        if self.policy.mode == "min":
+            return value < self.best_value
+        if self.policy.mode == "max":
+            return value > self.best_value
+        raise ValueError(f"Unknown mode: {self.policy.mode}")
+
+    def maybe_save_checkpoint(
+        self,
+        epoch: int,
+        model: torch.nn.Module,
+        optimizer: Optional[torch.optim.Optimizer],
+        metrics: Dict[str, Any],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Save checkpoints according to policy:
+        - best.pt when monitored metric improves (if save_best)
+        - last.pt every epoch (if keep_last)
+        - epoch_{k}.pt every save_every epochs (if save_every > 0)
+        """
+        if not self.policy.save_ckpt:
+            return
+
+        extra = extra or {}
+        state = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+            "metrics": metrics,
+            "cfg": self.cfg,
+            **extra,
+        }
+
+        # keep last
+        if self.policy.keep_last:
+            torch.save(state, os.path.join(self.ckpt_dir, "last.pt"))
+
+        # periodic
+        if self.policy.save_every and self.policy.save_every > 0:
+            if epoch % self.policy.save_every == 0:
+                torch.save(state, os.path.join(self.ckpt_dir, f"epoch_{epoch}.pt"))
+
+        # best
+        if self.policy.save_best:
+            if self.policy.monitor not in metrics:
+                # If monitor metric isn't present, do nothing (avoid crashing training)
+                return
+            try:
+                cur = float(metrics[self.policy.monitor])
+            except Exception:
+                return
+
+            if self._is_better(cur):
+                self.best_value = cur
+                self.best_epoch = epoch
+                torch.save(state, os.path.join(self.ckpt_dir, "best.pt"))
+                # Also write a small text marker
+                save_text(
+                    os.path.join(self.run_dir, "best.txt"),
+                    f"best_epoch: {epoch}\n{self.policy.monitor}: {cur}\n"
+                )
