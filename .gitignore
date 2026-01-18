@@ -7,3 +7,7 @@ untitled.ipynb
 mi_dict_42.pickle
 src/data_processing/__pycache__
 missing_corrected.csv
+src/utils/__pycache__
+src/__pycache__
+src/models/__pycache__
+src/models/ctmp_gin/__pycache__
