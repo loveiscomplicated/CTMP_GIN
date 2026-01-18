@@ -1,52 +1,41 @@
-'''
-결국 pyg Data / Batch를 생성해서 저장 또는 로드할 필요가 없었고, 오히려 불편함, 저장공간 낭비였음
-37개의 타임스탬프를 미리 만들어 저장하는 것은 원본 데이터의 37배에 달하는 용량으로 뻥튀기가 되는 것
-우리는 어차피 필요한 게 1. 입소 시, 2. 퇴소 시, 3. 제로 패딩 이기 때문에
-1,2만 들고 엔티티 임베딩까지 한 뒤에
-모델 입력하기 직전에 시계열 데이터로 변환하면 됨
-
-이 모든 걸 텐서로만 진행할 수 있음 + pyg Data / Batch를 쓰면 기본 알고리즘 때문에 쉐입이 이상해지던가 객체를 생성해서 저장하기 때문에 용량이 더 커짐
-
-
-독스트링은 LLM에 의해 생성됨
-'''
 import os
-import torch
 import pandas as pd
 
-from torch.utils.data import Dataset, DataLoader
-from .data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims, make_binary
-from .tackle_missing_value import tackle_missing_value_main
+from torch.utils.data import Dataset
+from src.data_processing.data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims, make_binary
+from src.data_processing.tackle_missing_value import tackle_missing_value_main
 
 CURDIR = os.path.dirname(__file__)
 
 class TEDSTensorDataset(Dataset):
     """
-    TEDS (Temporal Embedding Deep Sequence) 모델을 위한 PyTorch Dataset.
+    PyTorch Dataset for the TEDS (Temporal Embedding Deep Sequence) model.
 
-    원본 데이터를 pyg.Data/Batch 대신 **순수 PyTorch Tensor** 형태로 변환하고 저장하여,
-    저장 공간 낭비와 불필요한 객체 생성 오버헤드를 방지합니다. 데이터에는 입소(Admission) 
-    시점과 퇴소(Discharge) 시점 데이터만이 포함됩니다.
+    This dataset converts and stores the original data in the form of **pure PyTorch tensors**
+    instead of `pyg.Data` or `pyg.Batch`, in order to avoid storage inefficiency and unnecessary
+    object-creation overhead. The data include only two temporal snapshots: admission and
+    discharge.
 
     Attributes:
-        root (str): 데이터 저장 및 로드 경로의 루트 디렉토리.
-        processed_tensor (torch.Tensor): 전처리된 최종 데이터 텐서 (입력 데이터 + 레이블). 
-                                         Shape: (num_samples, num_features).
-                                         DataLoader에게 이걸 X, y로 나누어 전달하게 됨
-        col_info (tuple[list[int], list[int]]): 컬럼 정보. 
-                                                (입소 시점 컬럼 인덱스 리스트, 퇴소 시점 컬럼 인덱스 리스트)
-        LOS (pandas.Series): Length of Stay (재원 일수) 정보.
+        root (str): Root directory for storing and loading the dataset.
+        processed_tensor (torch.Tensor): Final preprocessed data tensor (inputs + labels).
+            Shape: (num_samples, num_features).
+            This tensor is later split into X and y when passed to the DataLoader.
+        col_info (tuple[list[int], list[int]]): Column index information.
+            (List of column indices at admission, list of column indices at discharge)
+        LOS (pandas.Series): Length of Stay (LOS) information.
     """
     def __init__(self, root:str, binary=True):
         """
-        TEDSTensorDataset의 생성자.
+        Constructor for the TEDSTensorDataset.
 
-        데이터 경로 설정, 디렉토리 생성 후, 전처리된 데이터를 로드하거나
-        새로운 전처리 과정을 수행하여 데이터를 메모리에 로드합니다.
+        This initializes dataset paths, creates required directories, and either loads
+        previously processed data or performs a new preprocessing step and loads the
+        resulting data into memory.
 
         Args:
-            root: 데이터가 위치할 루트 디렉토리 경로.
-            binary: REASON을 REASONb로 변환할 것인지 여부.
+            root (str): Root directory path where the dataset is stored.
+            binary (bool): Whether to convert REASON into its binary form (REASONb).
         """
         super().__init__()
         self.binary = binary
@@ -59,13 +48,15 @@ class TEDSTensorDataset(Dataset):
 
     def __getitem__(self, index):
         """
-        주어진 인덱스에 해당하는 하나의 샘플과 레이블을 반환합니다.
+        Returns a single sample and its label corresponding to the given index.
 
         Args:
-            index: 데이터 셋 내의 샘플 인덱스.
+            index (int): Index of the sample within the dataset.
 
         Returns:
-            (input_tensor, y_label): 입력 텐서와 레이블 텐서의 튜플.
+            tuple[torch.Tensor, torch.Tensor]: A tuple of (input_tensor, y_label),
+            where `input_tensor` is the input feature tensor and `y_label` is the
+            corresponding label tensor.
         """
         input_tensor = self.processed_tensor[index, :-1]
         y_label = self.processed_tensor[index, -1]
@@ -74,29 +65,27 @@ class TEDSTensorDataset(Dataset):
     
     def __len__(self):
         """
-        데이터 셋의 전체 샘플 개수를 반환합니다.
-
         Returns:
-            데이터 셋의 크기 (샘플 개수).
+            int: Size of the dataset (number of samples).
         """
         return self.processed_tensor.shape[0]
     
     def process(self):
         """
-        원본 데이터를 읽고 전처리 과정을 수행합니다.
+        Reads the raw data and performs preprocessing.
 
-        전처리 단계:
-        1. CSV 파일 로드 ('missing_corrected.csv')
-        2. 'LOS' (Length of Stay) 컬럼 분리 및 제거
-        3. 레이블 ('REASONb') 정리 (organize_labels)
-        4. 컬럼 정보 추출 (get_col_info)
-        5. Pandas DataFrame을 PyTorch Tensor로 변환 (df_to_tensor)
+        Preprocessing steps:
+        1. Load the CSV file ('missing_corrected.csv')
+        2. Separate and remove the 'LOS' (Length of Stay) column
+        3. Clean and organize the label column ('REASONb') using `organize_labels`
+        4. Extract column metadata using `get_col_info`
+        5. Convert the Pandas DataFrame to a PyTorch tensor using `df_to_tensor`
 
         Raises:
-            ValueError: 원본 데이터에 'LOS' 또는 'REASONb' 컬럼이 없을 경우 발생.
+            ValueError: If the raw data does not contain the 'LOS' or 'REASONb' column.
 
         Returns:
-            (df_tensor, col_info, LOS): 전처리된 데이터 튜플.
+            tuple: A tuple (df_tensor, col_info, LOS) containing the preprocessed data.
         """
         # missing value 
         df = tackle_missing_value_main(self.raw_data_path, self.missing_corrected_path)
@@ -150,6 +139,19 @@ class TEDSTensorDataset(Dataset):
     
 class TEDSDatasetForGIN(Dataset):
     def __init__(self, root, binary=True):
+        """
+        Constructor for the TEDSDatasetForGIN.
+        This Dataset is for Plain GIN. Static graph representation. 
+        (Does not seperate admission and discharge)
+
+        This initializes dataset paths, creates required directories, and either loads
+        previously processed data or performs a new preprocessing step and loads the
+        resulting data into memory.
+
+        Args:
+            root (str): Root directory path where the dataset is stored.
+            binary (bool): Whether to convert REASON into its binary form (REASONb).
+        """
         super().__init__()
         self.binary = binary
 
@@ -191,11 +193,26 @@ class TEDSDatasetForGIN(Dataset):
             self.col_dims = get_col_dims(df)
 
     def __getitem__(self, index):
+        """
+        Returns a single sample and its label corresponding to the given index.
+
+        Args:
+            index (int): Index of the sample within the dataset.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: A tuple of (input_tensor, y_label),
+            where `input_tensor` is the input feature tensor and `y_label` is the
+            corresponding label tensor.
+        """
         x = self.df_tensor[index, :-1]
         y = self.df_tensor[index, -1]
         return x, y
     
     def __len__(self):
+        """
+        Returns:
+            int: Size of the dataset (number of samples).
+        """
         return self.df_tensor.shape[0]
     
 

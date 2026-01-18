@@ -6,16 +6,18 @@ import pandas as pd
 from sklearn.feature_selection import mutual_info_classif
 from .data_utils import get_ad_dis_col
 
-'''
-1. search, check whether mi_dict exists
-2. if exists, load (pickle)
-3. else, calculate
-(value of mi_dict must be pd.Series)
-    df_ad, df_dis
-    get mi of each.
-'''
-
 def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
+    """
+    Compute mutual information (MI) between each column and all remaining columns.
+
+    Args:
+        df (pd.DataFrame): Training DataFrame.
+        seed (int): Random seed for MI estimation.
+        n_neighbors (int): Number of neighbors for MI estimation.
+
+    Returns:
+        dict: Mapping {target_column: MI Series over remaining columns}.
+    """
     mi_dict = {}
     for col in tqdm(df.columns):
         x = df.drop(col, axis=1)
@@ -26,6 +28,18 @@ def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
     return mi_dict
 
 def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str, n_neighbors=3):
+    """
+    Compute and save mutual information dictionary for all variables.
+
+    Args:
+        train_df (pd.DataFrame): Training DataFrame.
+        seed (int): Random seed.
+        mi_dict_path (str): Path to save the MI dictionary.
+        n_neighbors (int): Number of neighbors for MI estimation.
+
+    Returns:
+        dict: Mutual information dictionary.
+    """
     mi_dict = _get_mi_helper(train_df, seed, n_neighbors)
     with open(mi_dict_path, 'wb') as f:
         pickle.dump(mi_dict, f)
@@ -33,6 +47,16 @@ def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str, n_neighbor
     return mi_dict
 
 def _seperate_ad(mi_dict: dict, ad_col_list):
+    """
+    Extract admission-stage mutual information values.
+
+    Args:
+        mi_dict (dict): Full MI dictionary.
+        ad_col_list (list): Admission column list.
+
+    Returns:
+        dict: Admission-only MI dictionary.
+    """
     mi_ad_dict = {}
     for key, value in mi_dict.items():
         if key not in ad_col_list:
@@ -44,6 +68,16 @@ def _seperate_ad(mi_dict: dict, ad_col_list):
     return mi_ad_dict
 
 def _seperate_dis(mi_dict: dict, dis_col_list):
+    """
+    Extract discharge-stage mutual information values and align variable names.
+
+    Args:
+        mi_dict (dict): Full MI dictionary.
+        dis_col_list (list): Discharge column list.
+
+    Returns:
+        dict: Discharge-only MI dictionary.
+    """
     mi_dis_dict = {}
     for key, value in mi_dict.items():
         if key in dis_col_list:
@@ -60,6 +94,16 @@ def _seperate_dis(mi_dict: dict, dis_col_list):
     return mi_dis_dict
 
 def _get_avg(mi_ad_dict: dict, mi_dis_dict: dict):
+    """
+    Compute the average of admission and discharge MI values.
+
+    Args:
+        mi_ad_dict (dict): Admission MI dictionary.
+        mi_dis_dict (dict): Discharge MI dictionary.
+
+    Returns:
+        dict: Averaged MI dictionary.
+    """
     mi_avg_dict = {}
     var_list = mi_ad_dict.keys()
     
@@ -70,6 +114,17 @@ def _get_avg(mi_ad_dict: dict, mi_dis_dict: dict):
     return mi_avg_dict
 
 def seperate_ad_dis(mi_dict: dict, ad_col_list, dis_col_list):
+    """
+    Split MI dictionary into admission, discharge, and averaged components.
+
+    Args:
+        mi_dict (dict): Full MI dictionary.
+        ad_col_list (list): Admission column list.
+        dis_col_list (list): Discharge column list.
+
+    Returns:
+        tuple: (mi_ad_dict, mi_dis_dict, mi_avg_dict)
+    """
     mi_ad_dict = _seperate_ad(mi_dict=mi_dict, ad_col_list=ad_col_list)
     mi_dis_dict = _seperate_dis(mi_dict=mi_dict, dis_col_list=dis_col_list)
     mi_avg_dict = _get_avg(mi_ad_dict=mi_ad_dict, mi_dis_dict=mi_dis_dict)
@@ -77,6 +132,18 @@ def seperate_ad_dis(mi_dict: dict, ad_col_list, dis_col_list):
 
 
 def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
+    """
+    Load cached MI results or compute them, then split by admission/discharge.
+
+    Args:
+        root (str): Root directory for MI cache.
+        seed (int): Random seed.
+        train_df (pd.DataFrame): Training DataFrame.
+        n_neighbors (int): Number of neighbors for MI estimation.
+
+    Returns:
+        tuple: (mi_ad_dict, mi_dis_dict, mi_avg_dict)
+    """
     mi_dict_path = os.path.join(root, 'mi', f'mi_dict_{seed}.pickle')
     
     if os.path.exists(mi_dict_path):

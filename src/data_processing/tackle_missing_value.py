@@ -2,15 +2,18 @@ import os
 import pandas as pd
 
 def fill_not_applicable(df: pd.DataFrame):
-    ''' 
-    Certain variables are inherently associated with high missing rates,
-    due to their definition and scope.
-    For these variables, missing values correspond to cases where the variable is 
+    """
+    Replace structural missing values (-9) with a valid "Not applicable" category (0).
 
-    “Not applicable” 
+    Some variables are undefined by design for certain patients (e.g., pregnancy for males).
+    In such cases, -9 indicates "Not applicable" rather than missing information.
 
-    to a given patient, rather than cases of unobserved or corrupted data.
-    '''
+    Args:
+        df (pd.DataFrame): Input DataFrame.
+
+    Returns:
+        pd.DataFrame: DataFrame with structural missing values corrected.
+    """
     df.loc[(df['DETCRIM'] == -9) & (df['PSOURCE'] != 7), 'DETCRIM'] = 0
     df.loc[(df['DETNLF'] == -9) & (df['EMPLOY'] != 4), 'DETNLF'] = 0
     df.loc[(df['DETNLF_D'] == -9) & (df['EMPLOY_D'] != 4), 'DETNLF_D'] = 0
@@ -18,25 +21,37 @@ def fill_not_applicable(df: pd.DataFrame):
     return df
 
 def _fill_help(df:pd.DataFrame, sub, target_var):
+    """
+    Helper function to fill dependency-based missing values (-9).
+
+    If an upstream indicator (`sub`) is active and the downstream variable
+    is missing, the downstream value is set to 0.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame.
+        sub (str): Upstream indicator column.
+        target_var (str): Downstream column to fill.
+
+    Returns:
+        pd.DataFrame: Updated DataFrame.
+    """
     df.loc[(df[sub] == 1) & (df[target_var] == -9), target_var] = 0
     return df
 
 def fill_not_available(df:pd.DataFrame):
-    '''
-    Another major source of missing values arises from inter-variable dependencies 
-    in clinical documentation. In many cases, the recording of a downstream variable 
-    depends on the presence or value of an upstream variable. 
-    
-    If the upstream condition is not met, the downstream variable is recorded as unavailable.
-    Such missingness does not indicate the absence of information but rather reflects 
-    a procedural decision in the data collection process. 
-    
-    In the dataset, these cases are typically labeled as 
-    
-    “Unavailable” 
-    
-    and are encoded as missing values in the raw format.
-    '''
+    """
+    Replace dependency-driven missing values (-9) with a valid "Unavailable" category (0).
+
+    Some variables are missing due to procedural dependencies in data collection.
+    This function resolves such cases for substance-related variables at both
+    admission and discharge.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame.
+
+    Returns:
+        pd.DataFrame: DataFrame with dependency-based missing values corrected.
+    """
     variables = ('SUB', 'FREQ', 'ROUTE', 'FRSTUSE')
     for i in ('1', '2', '3'):
         cur_var = [name + i for name in variables]
@@ -51,12 +66,31 @@ def fill_not_available(df:pd.DataFrame):
     return df
 
 def tackle_missing_value(raw_df_path: str):
+    """
+    Load raw data and correct both structural and dependency-based missing values.
+
+    Args:
+        raw_df_path (str): Path to the raw CSV file.
+
+    Returns:
+        pd.DataFrame: DataFrame with corrected missing values.
+    """
     raw_df = pd.read_csv(raw_df_path)
     missing_corrected = fill_not_applicable(raw_df)
     missing_corrected = fill_not_available(missing_corrected)
     return missing_corrected
 
-def tackle_missing_value_main(raw_df_path: str, missing_corrected_path: str):
+def tackle_missing_value_wrapper(raw_df_path: str, missing_corrected_path: str):
+    """
+    Load preprocessed data if available; otherwise preprocess and save it.
+
+    Args:
+        raw_df_path (str): Path to the raw CSV file.
+        missing_corrected_path (str): Path to save/load the processed CSV.
+
+    Returns:
+        pd.DataFrame: Preprocessed DataFrame.
+    """
     if os.path.exists(missing_corrected_path):
         missing_corrected = pd.read_csv(missing_corrected_path)
         return missing_corrected

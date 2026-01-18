@@ -4,9 +4,16 @@ from copy import deepcopy
 from torch_geometric.utils import to_undirected
 
 def fully_connected_edge_index(num_nodes, self_loops=False):
-    '''
-    이름 그대로, num_nodes 즉 변수 개수만 알면 됨
-    '''
+    """
+    Create a fully connected edge index for a single graph.
+
+    Args:
+        num_nodes (int): Number of nodes (variables).
+        self_loops (bool): Whether to include self-loops.
+
+    Returns:
+        torch.Tensor: Edge index of shape [2, num_edges].
+    """
     nodes = torch.arange(num_nodes)
     row, col = torch.meshgrid(nodes, nodes, indexing="ij")
     edge_index = torch.stack([row.reshape(-1), col.reshape(-1)], dim=0)
@@ -16,24 +23,43 @@ def fully_connected_edge_index(num_nodes, self_loops=False):
     return edge_index
 
 def fully_connected_edge_index_batched(num_nodes, batch_size, self_loops=False):
-    '''
-    batched edge_index는 결국 옆으로 이어붙인 것일 뿐, 즉 shape: [2, sum(num_edges{i})]
-    '''
+    """
+    Create a batched fully connected edge index by concatenation.
+
+    Args:
+        num_nodes (int): Number of nodes per graph.
+        batch_size (int): Number of graphs in the batch.
+        self_loops (bool): Whether to include self-loops.
+
+    Returns:
+        torch.Tensor: Batched edge index of shape [2, total_edges].
+    """
     single = fully_connected_edge_index(num_nodes=num_nodes)
     batch_list = [single for i in range(batch_size)]
     return torch.concatenate(batch_list, dim=1)
 
 
-def mi_edge_index_single(mi_dict, top_k=6, threshold=0.01, pruning_ratio=0.5, return_edge_attr=False):
+def mi_edge_index_single(
+    mi_dict, top_k=6, threshold=0.01, pruning_ratio=0.5, return_edge_attr=False
+):
     """
-    개선된 MI 기반 그래프 생성 함수 (Strategies 1, 2, 3 적용)
-    
+    Construct a graph edge index from mutual information (MI).
+
+    Applies:
+        1) Undirected conversion
+        2) Threshold filtering
+        3) Top-k neighbor selection
+        4) In-degree pruning
+
     Args:
-        mi_dict_path (str): 피클 파일 경로
-        top_k (int): 상위 k개 선택
-        threshold (float): [Strategy 2] MI 값이 이보다 작으면 연결하지 않음 (기본값 0.01)
-        pruning_ratio (float): [Strategy 3] In-Degree가 전체 노드 수의 이 비율을 넘으면 하위 엣지 삭제 (기본값 0.5 = 50%)
-        return_edge_attr (bool): 가중치 반환 여부
+        mi_dict (dict): MI values per variable.
+        top_k (int): Number of top neighbors per node.
+        threshold (float): Minimum MI value to keep an edge.
+        pruning_ratio (float): Maximum allowed in-degree ratio.
+        return_edge_attr (bool): Whether to return MI as edge weights.
+
+    Returns:
+        torch.Tensor or tuple: Edge index, optionally with edge attributes.
     """
     cols = list(mi_dict.keys())
     num_nodes = len(cols)
@@ -107,10 +133,34 @@ def mi_edge_index_single(mi_dict, top_k=6, threshold=0.01, pruning_ratio=0.5, re
         edge_index = to_undirected(edge_index, num_nodes=num_nodes)
         return edge_index
 
-def mi_edge_index_batched(batch_size, num_nodes, mi_ad_dict, mi_dis_dict, top_k=6, threshold=0.01, pruning_ratio=0.5, return_edge_attr=False, edge_attr_single=None):
+def mi_edge_index_batched(
+    batch_size,
+    num_nodes,
+    mi_ad_dict,
+    mi_dis_dict,
+    top_k=6,
+    threshold=0.01,
+    pruning_ratio=0.5,
+    return_edge_attr=False,
+    edge_attr_single=None,
+):
     """
-    배치 처리를 위한 Wrapper 함수
+    Build batched MI-based edge indices for admission and discharge graphs.
+
+    Args:
+        batch_size (int): Batch size.
+        num_nodes (int): Number of nodes per graph.
+        mi_ad_dict (dict): Admission-stage MI dictionary.
+        mi_dis_dict (dict): Discharge-stage MI dictionary.
+        top_k (int): Number of top neighbors per node.
+        threshold (float): MI threshold.
+        pruning_ratio (float): In-degree pruning ratio.
+        return_edge_attr (bool): Whether to return edge weights.
+
+    Returns:
+        torch.Tensor or tuple: Batched edge index, optionally with edge attributes.
     """
+
     if return_edge_attr:
         single_ad, edge_attr_ad= mi_edge_index_single(
             mi_dict=mi_ad_dict, 
@@ -173,10 +223,34 @@ def mi_edge_index_batched(batch_size, num_nodes, mi_ad_dict, mi_dis_dict, top_k=
     return batched_edge_index
     
 
-def mi_edge_index_batched_for_baseline(batch_size, num_nodes, mi_avg_dict, top_k=6, threshold=0.01, pruning_ratio=0.5, return_edge_attr=False, edge_attr_single=None):
+def mi_edge_index_batched_for_baseline(
+    batch_size,
+    num_nodes,
+    mi_avg_dict,
+    top_k=6,
+    threshold=0.01,
+    pruning_ratio=0.5,
+    return_edge_attr=False,
+    edge_attr_single=None,
+):
     """
-    static batched edge index
+    Build a static batched MI-based edge index for baseline models.
+
+    Uses averaged MI values shared across all graphs in the batch.
+
+    Args:
+        batch_size (int): Batch size.
+        num_nodes (int): Number of nodes per graph.
+        mi_avg_dict (dict): Averaged MI dictionary.
+        top_k (int): Number of top neighbors per node.
+        threshold (float): MI threshold.
+        pruning_ratio (float): In-degree pruning ratio.
+        return_edge_attr (bool): Whether to return edge weights.
+
+    Returns:
+        torch.Tensor or tuple: Batched edge index, optionally with edge attributes.
     """
+
     batch_size_d = batch_size
 
     if return_edge_attr:
