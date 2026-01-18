@@ -3,7 +3,7 @@ import pandas as pd
 
 from torch.utils.data import Dataset
 from src.data_processing.data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims, make_binary
-from src.data_processing.tackle_missing_value import tackle_missing_value_main
+from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
 
 CURDIR = os.path.dirname(__file__)
 
@@ -88,7 +88,7 @@ class TEDSTensorDataset(Dataset):
             tuple: A tuple (df_tensor, col_info, LOS) containing the preprocessed data.
         """
         # missing value 
-        df = tackle_missing_value_main(self.raw_data_path, self.missing_corrected_path)
+        df = tackle_missing_value_wrapper(self.raw_data_path, self.missing_corrected_path)
 
         # remove unused variables
         # 1. CASEID -> ID of the cases.
@@ -159,7 +159,7 @@ class TEDSDatasetForGIN(Dataset):
         self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
         self.missing_corrected_path = os.path.join(self.root, 'raw', 'missing_corrected.csv')
 
-        df = tackle_missing_value_main(self.raw_data_path, self.missing_corrected_path)
+        df = tackle_missing_value_wrapper(self.raw_data_path, self.missing_corrected_path)
 
         # remove unused variables
         # 1. CASEID -> ID of the cases.
