@@ -1,18 +1,17 @@
 model:
   name: ctmp_gin
-
-params:
-  embedding_dim: 32
-  hidden_dim: 64
-  gin_hidden_channel: 32
-  gin_1_layers: 2
-  gin_hidden_channel_2: 32
-  gin_2_layers: 2
-  train_eps: True
-  dropout_p: 0.2
-  decision_threshold: 0.5
-  los_embedding_dim: 8
-    
+  params:
+    embedding_dim: 32
+    hidden_dim: 64
+    gin_hidden_channel: 32
+    gin_1_layers: 2
+    gin_hidden_channel_2: 32
+    gin_2_layers: 2
+    train_eps: True
+    dropout_p: 0.2
+    decision_threshold: 0.5
+    los_embedding_dim: 8
+      
 train:
   batch_size: 32
   lr: 0.001
