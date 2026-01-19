@@ -139,7 +139,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
         root (str): Root directory for MI cache.
         seed (int): Random seed.
         train_df (pd.DataFrame): Training DataFrame.
-        n_neighbors (int): Number of neighbors for MI estimation.
+        n_neighbors (int): Number of neighbors for MI estimation. # NOTE: cv result of n_neighbors: 3
 
     Returns:
         tuple: (mi_ad_dict, mi_dis_dict, mi_avg_dict)
@@ -152,8 +152,8 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
             mi_dict = pickle.load(f)
     else:
         print("Calculating MI...")
-        mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=3)
+        mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors) 
 
     ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=True)
     mi_ad_dict, mi_dis_dict, mi_avg_dict = seperate_ad_dis(mi_dict=mi_dict, ad_col_list=ad_col_list, dis_col_list=dis_col_list)
-    return mi_ad_dict, mi_dis_dict, mi_avg_dict
+    return mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict
