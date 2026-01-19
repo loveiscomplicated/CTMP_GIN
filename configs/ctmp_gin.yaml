@@ -1,33 +1,32 @@
+device: null # if null, it automatically sets the available device (cuda | mps | cpu)
+ 
 model:
   name: ctmp_gin
   params:
     embedding_dim: 32
-    hidden_dim: 64
     gin_hidden_channel: 32
     gin_1_layers: 2
     gin_hidden_channel_2: 32
     gin_2_layers: 2
     train_eps: True
     dropout_p: 0.2
-    decision_threshold: 0.5
     los_embedding_dim: 8
-      
+    gate_hidden_ch: null # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
+
 train:
   batch_size: 32
   lr: 0.001
   epochs: 100
   seed: 42
-   
-data:
   binary: True
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
-
-learning_rate_scheduler:
-  scheduler_patience: 5
-
-early_stopper:
+  num_workers: 0
+  lr_scheduler_patience: 5
   early_stopping_patience: 10
+
+evaluate:
+  decision_threshold: 0.5
 
 
