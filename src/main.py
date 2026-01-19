@@ -11,9 +11,7 @@ import pandas as pd
 from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
 from src.data_processing.tensor_dataset import TEDSTensorDataset, TEDSDatasetForGIN
 from src.data_processing.data_utils import train_test_split_stratified
-from src.data_processing.process_mi_dict import search_mi_dict
-from src.data_processing.edge import mi_edge_index_batched, mi_edge_index_batched_for_baseline
-from src.models.factory import build_model
+from src.models.factory import build_model, build_edge
 from src.trainers.base import train, evaluate
 from src.utils.experiment import make_run_id, ensure_run_dir, ExperimentLogger
 from src.utils.seed_set import set_seed
@@ -25,10 +23,11 @@ root = os.path.join(cur_dir, 'data')
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=str, required=True) # config file location
-    p.add_argument("--device", type=str, default=None)
     # overrides
     # p.add_argument("--model", type=str, default=None) no need, model selection only based on config
-    # more detailed adadjustment able in config file
+    # more detailed adjustment able in config file
+    p.add_argument("--is_mi_based_edge", type=int, default=None)
+    p.add_argument("--device", type=str, default=None)
     p.add_argument("--batch_size", type=int, default=None)
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--epochs", type=int, default=None)
@@ -44,6 +43,8 @@ def load_yaml(path: str) -> dict:
 def override_cfg(cfg: dict, args) -> dict:
     if args.device is not None:
         cfg["device"] = args.device
+    if args.is_mi_based_edge is not None:
+        cfg.setdefault("edge", {})["is_mi_based"] = bool(args.is_mi_based_edge)
     if args.batch_size is not None:
         cfg.setdefault("train", {})["batch_size"] = args.batch_size
     if args.lr is not None:
@@ -70,39 +71,50 @@ def main():
 
     device = device_set(cfg["device"])
 
+    # create dataset
     dataset = TEDSTensorDataset(
         root=root,
         binary=cfg["train"].get("binary", True),
     )
-    cfg["model"]["params"]["col_info"] = dataset.col_info
     
+    cfg["model"]["params"]["col_info"] = dataset.col_info
+    num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+
+    # create dataloaders
     split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
     train_loader, val_loader, test_loader, train_idx = train_test_split_stratified(dataset=dataset, 
                                                                                    batch_size=cfg['train']['batch_size'],
                                                                                    ratio=split_ratio,
                                                                                    seed=cfg['train']['seed'],
                                                                                    num_workers=cfg['train']['num_workers'])
+    train_df = dataset.processed_df.iloc[train_idx]
 
+    # build model
     model = build_model(
-        cfg["model"]["name"],
+        model_name=cfg["model"]["name"],
         device=device,
         **cfg["model"].get("params", {})
     )
 
+    edge_index = build_edge(model_name=cfg["model"]["name"],
+                            root=root,
+                            seed=seed,
+                            train_df=train_df,
+                            device=device,
+                            num_nodes=num_nodes,
+                            batch_size = cfg["train"]["batch_size"]
+                            **cfg.get("edge", {})
+                            )
 
-    counter = 0
-    for batch in train_loader:
-        if counter > 10: break
-        print(batch)
-        counter += 1
-
-    print(model)
-    '''train(
+    # TODO train loop 생성
+    train(
         model=model,
         dataloader=train_loader,
-        cfg=cfg,
-        logger=logger,
-    )'''
+        device=device,
+        edge_index=edge_index,
+        **cfg.get("train", {})
+    )
+
 
     
 

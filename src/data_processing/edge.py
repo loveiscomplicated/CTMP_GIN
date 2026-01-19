@@ -160,7 +160,6 @@ def mi_edge_index_batched(
     Returns:
         torch.Tensor or tuple: Batched edge index, optionally with edge attributes.
     """
-
     if return_edge_attr:
         single_ad, edge_attr_ad= mi_edge_index_single(
             mi_dict=mi_ad_dict, 
@@ -264,6 +263,45 @@ def mi_edge_index_batched_for_a3tgcn(
     else:
         single = mi_edge_index_single(
             mi_dict=mi_avg_dict, 
+            top_k=top_k, 
+            threshold=threshold, 
+            pruning_ratio=pruning_ratio,
+            return_edge_attr=return_edge_attr
+        )
+
+    edge_list = []
+    attr_list = []
+
+    for g in range(batch_size_d):
+        offset = num_nodes * g
+        edge_i = single + offset
+        edge_list.append(edge_i)
+
+        if return_edge_attr:
+            attr_list.append(edge_attr)
+    
+    batched_edge_index = torch.cat(edge_list, dim=1)
+
+    if return_edge_attr:
+        batched_attr_list = torch.cat(attr_list, dim=0)
+        return batched_edge_index, batched_attr_list
+    
+    return batched_edge_index
+
+def mi_edge_index_batched_for_gin(batch_size, num_nodes, mi_dict_all_variables, top_k=6, threshold=0.01, pruning_ratio=0.5, return_edge_attr=False, edge_attr_single=None):
+    batch_size_d = batch_size
+
+    if return_edge_attr:
+        single, edge_attr= mi_edge_index_single(
+            mi_dict=mi_dict_all_variables, 
+            top_k=top_k, 
+            threshold=threshold, 
+            pruning_ratio=pruning_ratio,
+            return_edge_attr=return_edge_attr
+        )
+    else:
+        single = mi_edge_index_single(
+            mi_dict=mi_dict_all_variables, 
             top_k=top_k, 
             threshold=threshold, 
             pruning_ratio=pruning_ratio,

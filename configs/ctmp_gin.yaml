@@ -1,5 +1,13 @@
-device: null # if null, it automatically sets the available device (cuda | mps | cpu)
- 
+device: null # if null, it automatically sets the available device. (cuda | mps | cpu)
+
+edge:
+  is_mi_based: True # if 0, it generates fully connected edge index.
+  n_neighbors: 3 # NOTE: cv result of n_neighbors: 3
+  top_k: 6
+  threshold: 0.01
+  pruning_ratio: 0.5
+  return_edge_attr: False # CAUTION: potential error when set to True
+
 model:
   name: ctmp_gin
   params:
