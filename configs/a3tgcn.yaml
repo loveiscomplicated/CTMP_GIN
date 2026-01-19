@@ -1,1 +1,2 @@
 # although mps is available, it is often better to use cpu
+# need is_copied on edge
