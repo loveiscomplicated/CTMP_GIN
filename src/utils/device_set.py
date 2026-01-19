@@ -11,7 +11,7 @@ def mps_device_set():
     print(f'Using device: {device}')
     return device
 
-def device_set():
+def _device_set():
     device = torch.device('cpu')
 
     if torch.cuda.is_available():
@@ -23,3 +23,19 @@ def device_set():
     print(f'Using device: {device}')
 
     return device
+
+
+def device_set(device_name=None):
+    if device_name:
+        try:
+            device = torch.device(device_name)
+            print(f'Using manually specified device: {device}')
+            return device
+        except Exception as e: 
+            print(f"Invalid device name '{device_name}': {e}")
+            print("Automatically detecting device...")
+            return _device_set()
+    else:
+        return _device_set()
+
+    
