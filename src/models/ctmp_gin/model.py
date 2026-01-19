@@ -12,7 +12,7 @@ cur_dir = os.path.dirname(__file__)
 par_dir = os.path.join(cur_dir, '..')
 sys.path.append(par_dir)
 
-from models.entity_embedding.model import EntityEmbeddingBatch3
+from src.models.entity_embedding.model import EntityEmbeddingBatch3
 
 
 '''class GatedFusion(nn.Module):

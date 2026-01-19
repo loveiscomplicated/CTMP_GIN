@@ -1,5 +1,5 @@
 # models/factory.py
-from models.ctmp_gin import CTMPGIN
+from src.models.ctmp_gin import CTMPGIN
 
 MODEL_REGISTRY = {
     "ctmp_gin": CTMPGIN,
