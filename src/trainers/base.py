@@ -86,8 +86,8 @@ def evaluate(model, val_dataloader, criterion, decision_threshold, device, edge_
     epoch_accuracy = total_correct / total_samples
 
     try:
-        # 이진 분류이므로 all_scores는 (N, 1)이 아닌 (N,) 형태여야 합니다.
-        # squeeze(1)을 통해 이를 보장했습니다.
+        # Since this is binary classification, all_scores must be (N,) not (N, 1).
+        # squeeze(1) ensures the correct dimensionality.
         epoch_auc = roc_auc_score(all_targets, all_scores) 
     except ValueError:
         print("Warning: AUC score could not be calculated.")
