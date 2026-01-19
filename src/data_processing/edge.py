@@ -223,7 +223,7 @@ def mi_edge_index_batched(
     return batched_edge_index
     
 
-def mi_edge_index_batched_for_baseline(
+def mi_edge_index_batched_for_a3tgcn(
     batch_size,
     num_nodes,
     mi_avg_dict,
