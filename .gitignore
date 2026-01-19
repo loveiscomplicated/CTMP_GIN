@@ -12,3 +12,6 @@ src/__pycache__
 src/models/__pycache__
 src/models/ctmp_gin/__pycache__
 runs
+src/trainers/utils/__pycache__
+src/models/entity_embedding/__pycache__
+src/trainers/__pycache__
