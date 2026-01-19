@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GINConv, GINEConv
 
-
 cur_dir = os.path.dirname(__file__)
 par_dir = os.path.join(cur_dir, '..')
 sys.path.append(par_dir)
