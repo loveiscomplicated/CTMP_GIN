@@ -25,7 +25,7 @@ def build_edge(model_name: str,
                batch_size: int,
                **kwargs):
     if not kwargs["is_mi_based"]:
-        return fully_connected_edge_index_batched(num_nodes=num_nodes, batch_size=batch_size, self_loops=False)
+        return fully_connected_edge_index_batched(num_nodes=num_nodes, batch_size=batch_size)
     
     mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = search_mi_dict(root=root,
                                 seed=seed,

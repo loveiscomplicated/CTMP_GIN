@@ -3,13 +3,13 @@ import pickle
 from copy import deepcopy
 from torch_geometric.utils import to_undirected
 
-def fully_connected_edge_index(num_nodes, self_loops=False):
+def fully_connected_edge_index(num_nodes):
     """
     Create a fully connected edge index for a single graph.
 
     Args:
         num_nodes (int): Number of nodes (variables).
-        self_loops (bool): Whether to include self-loops.
+        return_edge_attr (bool): Whether to include edge_attr.
 
     Returns:
         torch.Tensor: Edge index of shape [2, num_edges].
@@ -17,19 +17,16 @@ def fully_connected_edge_index(num_nodes, self_loops=False):
     nodes = torch.arange(num_nodes)
     row, col = torch.meshgrid(nodes, nodes, indexing="ij")
     edge_index = torch.stack([row.reshape(-1), col.reshape(-1)], dim=0)
-    if not self_loops:
-        mask = row != col
-        edge_index = edge_index[:, mask.reshape(-1)]
     return edge_index
 
-def fully_connected_edge_index_batched(num_nodes, batch_size, self_loops=False):
+def fully_connected_edge_index_batched(num_nodes, batch_size):
     """
     Create a batched fully connected edge index by concatenation.
 
     Args:
         num_nodes (int): Number of nodes per graph.
         batch_size (int): Number of graphs in the batch.
-        self_loops (bool): Whether to include self-loops.
+        return_edge_attr (bool): Whether to include edge_attr.
 
     Returns:
         torch.Tensor: Batched edge index of shape [2, total_edges].
