@@ -12,7 +12,7 @@ def fully_connected_edge_index(num_nodes):
         return_edge_attr (bool): Whether to include edge_attr.
 
     Returns:
-        torch.Tensor: Edge index of shape [2, num_edges].
+        torch.Tensor or tuple: Batched edge index, optionally with edge attributes.
     """
     nodes = torch.arange(num_nodes)
     row, col = torch.meshgrid(nodes, nodes, indexing="ij")
@@ -29,7 +29,7 @@ def fully_connected_edge_index_batched(num_nodes, batch_size):
         return_edge_attr (bool): Whether to include edge_attr.
 
     Returns:
-        torch.Tensor: Batched edge index of shape [2, total_edges].
+        torch.Tensor: Batched edge index of shape [2, total_edges], optionally with edge attributes.
     """
     single = fully_connected_edge_index(num_nodes=num_nodes)
     batch_list = [single for i in range(batch_size)]
