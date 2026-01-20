@@ -144,6 +144,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
     Returns:
         tuple: (mi_ad_dict, mi_dis_dict, mi_avg_dict)
     """
+    print("Buliding Mutual Information based edge index")
     mi_dict_path = os.path.join(root, 'mi', f'mi_dict_{seed}.pickle')
     
     if os.path.exists(mi_dict_path):
