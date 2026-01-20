@@ -95,25 +95,34 @@ def main():
         device=device,
         **cfg["model"].get("params", {})
     )
+    model.to(device)
+    total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
 
+    # build edge_index
     edge_index = build_edge(model_name=cfg["model"]["name"],
                             root=root,
                             seed=seed,
                             train_df=train_df,
                             device=device,
                             num_nodes=num_nodes,
-                            batch_size = cfg["train"]["batch_size"]
+                            batch_size = cfg["train"]["batch_size"],
                             **cfg.get("edge", {})
                             )
+    edge_index.to(device) # type: ignore
+
+    print(f'edge index: \n{edge_index}')
+    print(f'edge index shape: \n{edge_index.shape}')
+
 
     # TODO train loop 생성
-    train(
+    '''train(
         model=model,
         dataloader=train_loader,
         device=device,
         edge_index=edge_index,
         **cfg.get("train", {})
-    )
+    )'''
 
 
     
