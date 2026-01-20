@@ -31,10 +31,19 @@ def fully_connected_edge_index_batched(num_nodes, batch_size):
     Returns:
         torch.Tensor: Batched edge index of shape [2, total_edges], optionally with edge attributes.
     """
+    # first = fully_connected_edge_index(num_nodes=num_nodes)
+    # second = first + num_nodes
+    # double = torch.cat([first, second], dim=1) # due to admission and discharge
     single = fully_connected_edge_index(num_nodes=num_nodes)
-    batch_list = [single for i in range(batch_size)]
-    return torch.concatenate(batch_list, dim=1)
+    edge_list = []
 
+    for g in range(batch_size * 2): 
+        offset = num_nodes * g
+        edge_i = single + offset
+        edge_list.append(edge_i)
+
+    batched_edge_index = torch.cat(edge_list, dim=1)
+    return batched_edge_index
 
 def mi_edge_index_single(
     mi_dict, top_k=6, threshold=0.01, pruning_ratio=0.5, return_edge_attr=False
