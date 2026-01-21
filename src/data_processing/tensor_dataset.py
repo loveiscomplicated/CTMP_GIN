@@ -186,11 +186,15 @@ class TEDSDatasetForGIN(Dataset):
         self.df_tensor = df_to_tensor(df)
 
         if self.binary:
+            self.num_classes = len(df["REASONb"].unique())
             df = df.drop("REASONb", axis=1)
             self.col_dims = get_col_dims(df)
         else:
+            self.num_classes = len(df["REASON"].unique())
             df = df.drop("REASON", axis=1)
             self.col_dims = get_col_dims(df)
+        
+        
 
     def __getitem__(self, index):
         """
