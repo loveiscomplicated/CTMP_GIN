@@ -6,7 +6,7 @@ from torch_geometric.nn import GINConv
 from src.models.entity_embedding import EntityEmbeddingBatch3
 
 class GIN(nn.Module):
-    def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, device, train_eps=True) -> None:
+    def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, device, num_classes, train_eps=True) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
         self.col_dims = col_info[1] # col_info: (col_list, col_dims, ad_col_index, dis_col_index) 
@@ -131,4 +131,34 @@ class GIN_m(nn.Module):
             nn.ReLU(),
             nn.Linear(self.classifier_dim * 2, num_classes)
         )
+    
+    def forward(self, x, los, edge_index, **kwargs):
+        # initial setting
+        if x.ndim == 1:
+            batch_size = 1
+            x = x.unsqueeze(dim=0)
+        elif x.ndim == 2:
+            batch_size = x.shape[0]
+        else:
+            raise ValueError("incorrect x dim")
         
+        los = los.unsqueeze(dim=1)
+        x = torch.cat((x, los), dim=1)
+
+        num_nodes = x.shape[1]
+
+        # entity embedding
+        x_embedded = self.entity_embedding_layer(x) # [batch, num_var, entity_emb_dim]
+
+        # gin layers
+        node_embeddings = x_embedded.reshape(batch_size * num_nodes, -1) # [batch * num_var, entity_emb_dim]
+        sum_pooled = []
+        for layer in self.gin_layers:
+            node_embeddings = layer(node_embeddings, edge_index) # [batch * num_var, feature_dim]
+            x_temp = node_embeddings.reshape(batch_size, num_nodes, -1) # [batch, num_var, feature_dim]
+            x_sum = torch.sum(x_temp, dim=1) # [batch, feature_dim]
+            sum_pooled.append(x_sum)
+        graph_emb = torch.cat(sum_pooled, dim=1) # [batch, feature_dim * layer_num]
+
+        # classifier
+        return self.classifier(graph_emb)

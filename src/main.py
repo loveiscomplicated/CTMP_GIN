@@ -142,6 +142,7 @@ def main():
     run_train_loop(
         model=model,
         edge_index=edge_index,
+        binary=cfg["train"]["binary"],
         train_dataloader=train_loader,
         val_dataloader=val_loader,
         test_dataloader=test_loader,

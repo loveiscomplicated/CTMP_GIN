@@ -14,7 +14,8 @@ model:
     embedding_dim: 32
     gin_hidden_channel: 32
     gin_1_layers: 2
-    gin_hidden_channel_2: 32
+    gin_hidden_channel_2: 32 # Must match the first GIN's dimensions to avoid errors; 
+                             # otherwise, a projection layer is required.
     gin_2_layers: 2
     train_eps: True
     los_embedding_dim: 8

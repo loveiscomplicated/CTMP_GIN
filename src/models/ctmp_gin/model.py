@@ -71,9 +71,11 @@ class CTMPGIN(nn.Module):
                  embedding_dim, 
                  gin_hidden_channel, 
                  gin_1_layers, 
-                 gin_hidden_channel_2, # 오류를 피하기 위해서는 일단 첫번째 gin과 동일한 차원이어야 함, 만약 다르게 하려면 projection 추가해야 함
+                 gin_hidden_channel_2, # Must match the first GIN's dimensions to avoid errors; 
+                                       # otherwise, a projection layer is required.  
                  gin_2_layers, 
                  device,
+                 num_classes,
                  dropout_p = 0.2,
                  los_embedding_dim=8, 
                  max_los=37,

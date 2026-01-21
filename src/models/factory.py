@@ -10,6 +10,7 @@ import torch
 MODEL_REGISTRY = {
     "ctmp_gin": CTMPGIN,
     "gin": GIN,
+    
     "gin_m": GIN_m
 }
 

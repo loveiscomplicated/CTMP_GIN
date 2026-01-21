@@ -1,16 +1,16 @@
 import os
 import sys
-from pathlib import Path
+import torch
 import numpy as np
 from tqdm import tqdm
-import torch
+from pathlib import Path
+import torch.nn.functional as F
 from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
 
 project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root.parent))
 
-
-def train(model, dataloader, criterion, optimizer, edge_index, device):
+def train(model, dataloader, criterion, optimizer, edge_index, binary, device):
     model.train()
     running_loss = 0.0
     for x_batch, y_batch, los_batch in tqdm(dataloader, desc="train_process", leave=True):
@@ -25,9 +25,11 @@ def train(model, dataloader, criterion, optimizer, edge_index, device):
             los_batch,
             edge_index,
         )
-
-        logits = logits.squeeze(1)
-        loss = criterion(logits, y_batch.float())
+        if binary: 
+            logits = logits.squeeze(1)
+            loss = criterion(logits, y_batch.float())
+        else:
+            loss = criterion(logits, y_batch.long())
 
         loss.backward()
         optimizer.step()
@@ -37,7 +39,110 @@ def train(model, dataloader, criterion, optimizer, edge_index, device):
     epoch_loss = running_loss / len(dataloader.dataset)
     return epoch_loss
 
-def evaluate(model, val_dataloader, criterion, decision_threshold, device, edge_index):
+
+def evaluate(
+    model,
+    val_dataloader,
+    criterion,
+    decision_threshold,
+    device,
+    binary,
+    edge_index,
+    num_classes: int | None = None,   # multiclass일 때만 필요 (없으면 자동 추정 시도)
+):
+    model.eval()
+    running_loss = 0.0
+    total_correct = 0
+    total_samples = 0
+
+    all_targets = []
+    all_predictions = []
+    all_scores = []  # binary: (N,), multiclass: (N, K)
+
+    with torch.no_grad():
+        for x_batch, y_batch, los_batch in tqdm(val_dataloader, desc="eval_process", leave=True):
+            x_batch = x_batch.to(device)
+            y_batch = y_batch.to(device)
+            los_batch = los_batch.to(device)
+
+            logits = model(x_batch, los_batch, edge_index)
+
+            if binary:
+                # logits: [B, 1] or [B]
+                if logits.ndim == 2 and logits.size(1) == 1:
+                    logits_1d = logits.squeeze(1)   # [B]
+                else:
+                    logits_1d = logits              # [B]
+
+                loss = criterion(logits_1d, y_batch.float())
+
+                scores = torch.sigmoid(logits_1d)  # [B]
+                predicted = (scores >= decision_threshold).long()  # [B]
+
+                all_scores.append(scores.detach().cpu().numpy())  # (B,)
+
+            else:
+                # multiclass logits: [B, K]
+                # y_batch must be int class indices: [B]
+                loss = criterion(logits, y_batch.long())
+
+                probs = F.softmax(logits, dim=1)         # [B, K]
+                predicted = torch.argmax(probs, dim=1)   # [B]
+
+                all_scores.append(probs.detach().cpu().numpy())   # (B, K)
+
+            running_loss += loss.item() * x_batch.size(0)
+
+            all_targets.append(y_batch.detach().cpu().numpy())
+            all_predictions.append(predicted.detach().cpu().numpy())
+
+            total_correct += (predicted == y_batch).sum().item()
+            total_samples += y_batch.size(0)
+
+    all_targets = np.concatenate(all_targets)         # (N,)
+    all_predictions = np.concatenate(all_predictions) # (N,)
+    all_scores = np.concatenate(all_scores)           # binary: (N,), multiclass: (N, K)
+
+    epoch_loss = running_loss / len(val_dataloader.dataset)
+    epoch_accuracy = total_correct / total_samples
+
+    # precision/recall/f1
+    # binary도 macro 써도 되긴 하지만, binary면 average='binary'가 더 직관적일 때가 많음
+    if binary:
+        epoch_precision = precision_score(all_targets, all_predictions, average='binary', zero_division=0)
+        epoch_recall = recall_score(all_targets, all_predictions, average='binary', zero_division=0)
+        epoch_f1 = f1_score(all_targets, all_predictions, average='binary', zero_division=0)
+    else:
+        epoch_precision = precision_score(all_targets, all_predictions, average='macro', zero_division=0)
+        epoch_recall = recall_score(all_targets, all_predictions, average='macro', zero_division=0)
+        epoch_f1 = f1_score(all_targets, all_predictions, average='macro', zero_division=0)
+
+    # AUC
+    try:
+        if binary:
+            epoch_auc = roc_auc_score(all_targets, all_scores)  # all_scores: (N,)
+        else:
+            # num_classes가 없으면 scores shape로 추정
+            K = num_classes if num_classes is not None else all_scores.shape[1]
+            # multiclass AUC: (N,K) probs + (N,) labels
+            epoch_auc = roc_auc_score(all_targets, all_scores, multi_class='ovr', average='macro')
+    except ValueError:
+        print("Warning: AUC score could not be calculated (maybe missing classes in targets).")
+        epoch_auc = 0.0
+
+    # label counts 출력 (전체 누적 기준)
+    if binary:
+        print("Valid preds label counts:", np.bincount(all_predictions.astype(int), minlength=2))
+        print("Valid true label counts:", np.bincount(all_targets.astype(int), minlength=2))
+    else:
+        K = num_classes if num_classes is not None else int(all_scores.shape[1])
+        print("Valid preds label counts:", np.bincount(all_predictions.astype(int), minlength=K))
+        print("Valid true label counts:", np.bincount(all_targets.astype(int), minlength=K))
+
+    return epoch_loss, epoch_accuracy, epoch_precision, epoch_recall, epoch_f1, epoch_auc
+
+
+'''def evaluate(model, val_dataloader, criterion, decision_threshold, device, edge_index):
     model.eval()
     running_loss = 0.0
     total_correct = 0
@@ -101,7 +206,7 @@ def evaluate(model, val_dataloader, criterion, decision_threshold, device, edge_
     print("Valid true label counts:", torch.bincount(y_batch))
 
 
-    return epoch_loss, epoch_accuracy, epoch_precision, epoch_recall, epoch_f1, epoch_auc
+    return epoch_loss, epoch_accuracy, epoch_precision, epoch_recall, epoch_f1, epoch_auc'''
 
 
 def save_checkpoint(epoch, model, optimizer, scheduler, best_loss, filename):
@@ -153,6 +258,7 @@ def run_train_loop(
     scheduler,
     early_stopper,
     device,
+    binary,
     logger=None,
     start_epoch: int = 1,
     **kwargs
@@ -165,10 +271,10 @@ def run_train_loop(
     for epoch in tqdm(range(start_epoch, EPOCHS + 1)):
         last_epoch = epoch
 
-        train_loss = train(model, train_dataloader, criterion, optimizer, edge_index, device)
+        train_loss = train(model, train_dataloader, criterion, optimizer, edge_index, binary, device)
 
         val_loss, val_accuracy, val_precision, val_recall, val_f1, val_auc = evaluate(
-            model, val_dataloader, criterion, decision_threshold, device, edge_index
+            model, val_dataloader, criterion, decision_threshold, device, binary, edge_index
         )
 
         if scheduler is not None:
@@ -213,7 +319,7 @@ def run_train_loop(
 
     with torch.no_grad():
         test_loss, test_accuracy, test_precision, test_recall, test_f1, test_auc = evaluate(
-            model, test_dataloader, criterion, decision_threshold, device, edge_index
+            model, test_dataloader, criterion, decision_threshold, device, binary, edge_index
         )
 
     print(f"\n[Test] Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}")
