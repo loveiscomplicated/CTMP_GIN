@@ -7,15 +7,19 @@ sys.path.insert(0, str(project_root.parent))
 
 import yaml
 import argparse
+import torch
+import torch.nn as nn
 import pandas as pd
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
 from src.data_processing.tensor_dataset import TEDSTensorDataset, TEDSDatasetForGIN
 from src.data_processing.data_utils import train_test_split_stratified
 from src.models.factory import build_model, build_edge
-from src.trainers.base import train, evaluate
+from src.trainers.base import run_train_loop
 from src.utils.experiment import make_run_id, ensure_run_dir, ExperimentLogger
 from src.utils.seed_set import set_seed
 from src.utils.device_set import device_set
+from src.trainers.utils.early_stopper import EarlyStopper
 
 cur_dir = os.path.dirname(__file__)
 root = os.path.join(cur_dir, 'data')
@@ -29,9 +33,10 @@ def parse_args():
     p.add_argument("--is_mi_based_edge", type=int, default=None)
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--batch_size", type=int, default=None)
-    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--learning_rate", type=float, default=None)
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--decision_threshold", type=float, default=None)
     # TODO non-binary (Multiclass Classification) implement later
     p.add_argument("--binary", type=int, default=None)
     return p.parse_args()
@@ -47,14 +52,17 @@ def override_cfg(cfg: dict, args) -> dict:
         cfg.setdefault("edge", {})["is_mi_based"] = bool(args.is_mi_based_edge)
     if args.batch_size is not None:
         cfg.setdefault("train", {})["batch_size"] = args.batch_size
-    if args.lr is not None:
-        cfg.setdefault("train", {})["lr"] = args.lr
+    if args.learning_rate is not None:
+        cfg.setdefault("train", {})["learning_rate"] = args.learning_rate
     if args.epochs is not None:
         cfg.setdefault("train", {})["epochs"] = args.epochs
     if args.seed is not None:
         cfg.setdefault("train", {})["seed"] = args.seed
     if args.binary is not None:
         cfg.setdefault("train", {})["binary"] = bool(args.binary)
+    if args.decision_threshold is not None:
+        cfg.setdefault("train", {})["decision_threshold"] = args.decision_threshold
+
     return cfg
 
 def main():
@@ -85,7 +93,7 @@ def main():
     train_loader, val_loader, test_loader, train_idx = train_test_split_stratified(dataset=dataset, 
                                                                                    batch_size=cfg['train']['batch_size'],
                                                                                    ratio=split_ratio,
-                                                                                   seed=cfg['train']['seed'],
+                                                                                   seed=seed,
                                                                                    num_workers=cfg['train']['num_workers'])
     train_df = dataset.processed_df.iloc[train_idx]
 
@@ -95,7 +103,7 @@ def main():
         device=device,
         **cfg["model"].get("params", {})
     )
-    model.to(device)
+    model = model.to(device)
     total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
 
@@ -109,22 +117,35 @@ def main():
                             batch_size = cfg["train"]["batch_size"],
                             **cfg.get("edge", {})
                             )
-    edge_index.to(device) # type: ignore
+    edge_index = edge_index.to(device) # type: ignore
 
     print(f'edge index: \n{edge_index}')
     print(f'edge index shape: \n{edge_index.shape}')
 
+    if cfg["train"]["binary"]:
+        criterion = nn.BCEWithLogitsLoss()
+    else:
+        criterion = nn.CrossEntropyLoss()
+        
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["learning_rate"])
+    scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
+    early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
 
-    # TODO train loop 생성
-    '''train(
+    run_train_loop(
         model=model,
-        dataloader=train_loader,
-        device=device,
         edge_index=edge_index,
-        **cfg.get("train", {})
-    )'''
-
-
+        train_dataloader=train_loader,
+        val_dataloader=val_loader,
+        test_dataloader=test_loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        early_stopper=early_stopper,
+        device=device,
+        logger=logger,
+        epochs=cfg["train"]["epochs"],
+        decision_threshold=cfg["train"]["decision_threshold"],
+    )
     
 
 if __name__ == "__main__":

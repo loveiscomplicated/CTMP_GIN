@@ -4,14 +4,11 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 import torch
-import torch.nn as nn
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
 
 project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root.parent))
 
-from trainers.utils.early_stopper import EarlyStopper
 
 def train(model, dataloader, criterion, optimizer, edge_index, device):
     model.train()
@@ -144,3 +141,90 @@ def load_checkpoint(model, optimizer, scheduler, filename, map_location=None):
     best_loss = checkpoint['best_loss']
 
     return start_epoch, best_loss
+
+def run_train_loop(
+    model,
+    edge_index,
+    train_dataloader,
+    val_dataloader,
+    test_dataloader,
+    criterion,
+    optimizer,
+    scheduler,
+    early_stopper,
+    device,
+    logger=None,
+    start_epoch: int = 1,
+    **kwargs
+):
+    EPOCHS = kwargs["epochs"]
+    decision_threshold = kwargs["decision_threshold"]
+
+    last_epoch = start_epoch - 1  # 루프가 0번 돌 때 대비
+
+    for epoch in tqdm(range(start_epoch, EPOCHS + 1)):
+        last_epoch = epoch
+
+        train_loss = train(model, train_dataloader, criterion, optimizer, edge_index, device)
+
+        val_loss, val_accuracy, val_precision, val_recall, val_f1, val_auc = evaluate(
+            model, val_dataloader, criterion, decision_threshold, device, edge_index
+        )
+
+        if scheduler is not None:
+            scheduler.step(val_loss)
+
+        current_lr = optimizer.param_groups[0]["lr"]
+
+        metrics = {
+            "lr": float(current_lr),
+            "train_loss": float(train_loss),
+            "valid_loss": float(val_loss),
+            "valid_acc": float(val_accuracy),
+            "valid_precision": float(val_precision),
+            "valid_recall": float(val_recall),
+            "valid_f1": float(val_f1),
+            "valid_auc": float(val_auc),
+        }
+
+        if logger is not None:
+            logger.log_metrics(epoch, metrics)
+            logger.maybe_save_checkpoint(
+                epoch=epoch,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                metrics=metrics,
+                extra=None,  # edge_index는 일단 저장하지 않기 추천
+            )
+            if logger.best_epoch == epoch:
+                print(f"  ✅ New best saved: valid_loss={val_loss:.4f}")
+
+        print(f"\n[Epoch {epoch}/{EPOCHS}]")
+        print(f"  [Train] LR: {current_lr:.6f} | Loss: {train_loss:.4f}")
+        print(f"  [Valid] Loss: {val_loss:.4f} | Acc: {val_accuracy:.4f}, Prec: {val_precision:.4f}, Rec: {val_recall:.4f}, F1: {val_f1:.4f}, AUC: {val_auc:.4f}")
+
+        should_stop = early_stopper(val_loss)
+        if should_stop:
+            print("\n--- Early Stopping activated. Learning terminated. ---")
+            break
+
+    print("\n--- Training Finished ---")
+
+    with torch.no_grad():
+        test_loss, test_accuracy, test_precision, test_recall, test_f1, test_auc = evaluate(
+            model, test_dataloader, criterion, decision_threshold, device, edge_index
+        )
+
+    print(f"\n[Test] Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}")
+
+    if logger is not None:
+        logger.log_metrics(last_epoch, {
+            "split": "test",
+            "test_loss": float(test_loss),
+            "test_acc": float(test_accuracy),
+            "test_precision": float(test_precision),
+            "test_recall": float(test_recall),
+            "test_f1": float(test_f1),
+            "test_auc": float(test_auc),
+        })

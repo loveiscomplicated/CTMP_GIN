@@ -17,13 +17,12 @@ model:
     gin_hidden_channel_2: 32
     gin_2_layers: 2
     train_eps: True
-    dropout_p: 0.2
     los_embedding_dim: 8
     gate_hidden_ch: null # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
 
 train:
   batch_size: 32
-  lr: 0.001
+  learning_rate: 0.001 # optimizer learning rate
   epochs: 100
   seed: 42
   binary: True
@@ -33,8 +32,7 @@ train:
   num_workers: 0
   lr_scheduler_patience: 5
   early_stopping_patience: 10
-
-evaluate:
+  dropout_p: 0.2
   decision_threshold: 0.5
 
 

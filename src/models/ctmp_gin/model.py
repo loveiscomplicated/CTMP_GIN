@@ -168,7 +168,7 @@ class CTMPGIN(nn.Module):
             nn.Linear(self.fuse_dim * 2, 1)
             )
 
-    def forward(self, x, los, edge_index):
+    def forward(self, x, los, edge_index, **kwargs):
         batch_size = x.shape[0]
         num_nodes = len(self.ad_idx_t)
 

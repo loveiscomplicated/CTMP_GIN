@@ -146,6 +146,7 @@ class ExperimentLogger:
         epoch: int,
         model: torch.nn.Module,
         optimizer: Optional[torch.optim.Optimizer],
+        scheduler: Optional[Any],
         metrics: Dict[str, Any],
         extra: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -163,6 +164,7 @@ class ExperimentLogger:
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+            "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
             "metrics": metrics,
             "cfg": self.cfg,
             **extra,
@@ -195,4 +197,68 @@ class ExperimentLogger:
                 save_text(
                     os.path.join(self.run_dir, "best.txt"),
                     f"best_epoch: {epoch}\n{self.policy.monitor}: {cur}\n"
-                )
+                    )
+
+    def load_checkpoint(
+        self,
+        model: torch.nn.Module,
+        optimizer: Optional[torch.optim.Optimizer] = None,
+        scheduler: Optional[Any] = None,
+        ckpt_name: str = "last.pt",
+        map_location: Optional[str] = "cpu",
+    ) -> Dict[str, Any]:
+        
+        ckpt_path = os.path.join(self.ckpt_dir, ckpt_name)
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+        state = torch.load(ckpt_path, map_location=map_location)
+
+        # 1) model
+        model.load_state_dict(state["model_state_dict"])
+
+        # 2) optimizer
+        if optimizer is not None and state.get("optimizer_state_dict") is not None:
+            optimizer.load_state_dict(state["optimizer_state_dict"])
+
+        # 3) scheduler
+        if scheduler is not None and state.get("scheduler_state_dict") is not None:
+            scheduler.load_state_dict(state["scheduler_state_dict"])
+
+        # best tracking(선택)
+        self.best_epoch = None
+        self.best_value = None
+        if os.path.basename(ckpt_name) == "best.pt":
+            m = state.get("metrics", {})
+            if self.policy.monitor in m:
+                try:
+                    self.best_value = float(m[self.policy.monitor])
+                except Exception:
+                    self.best_value = None
+            self.best_epoch = state.get("epoch", None)
+
+        return state
+
+    def resume_if_possible(
+        self,
+        model: torch.nn.Module,
+        optimizer: Optional[torch.optim.Optimizer] = None,
+        scheduler: Optional[Any] = None,
+        prefer: str = "last",   # "last" or "best"
+        map_location: Optional[str] = "cpu",
+    ) -> int:
+        ckpt_name = f"{prefer}.pt"
+        ckpt_path = os.path.join(self.ckpt_dir, ckpt_name)
+
+        if not os.path.exists(ckpt_path):
+            return 0  # fresh start
+
+        state = self.load_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            ckpt_name=ckpt_name,
+            map_location=map_location,
+        )
+        last_epoch = int(state.get("epoch", 0))
+        return last_epoch + 1  # 다음 epoch부터 시작
