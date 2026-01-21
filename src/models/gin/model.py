@@ -5,7 +5,7 @@ from torch_geometric.nn import GINConv
 
 from src.models.entity_embedding import EntityEmbeddingBatch3
 
-class GINBaseline(nn.Module):
+class GIN(nn.Module):
     def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, device, train_eps=True) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
