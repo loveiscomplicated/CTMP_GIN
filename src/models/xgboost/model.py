@@ -1,88 +1,173 @@
 import os
-from xgboost import XGBClassifier
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
-from sklearn.metrics import log_loss
+from xgboost import XGBClassifier, Booster
 import matplotlib.pyplot as plt
-import numpy as np
+from sklearn.metrics import (
+    log_loss, roc_auc_score,
+    f1_score, precision_score, recall_score,
+    accuracy_score
+)
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import make_scorer, roc_auc_score, f1_score
+from scipy.stats import uniform, randint
+from src.utils.experiment import ExperimentLogger
+from src.models.xgboost.cv import cross_validate
 
-CURDIR = os.path.dirname(__file__)
-PARDIR = os.path.join(CURDIR, '..')
-root = os.path.join(PARDIR, 'data_tensor_cache')
-data_path = os.path.join(root, 'raw', 'missing_corrected.csv')
 
-def train_xgboost(train_idx, test_idx, df, logger):
-    """
-    XGBoost 모델을 학습하고 평가하는 메인 함수
-    """
-    # 1. 데이터 불러오기
-    data = pd.read_csv(data_path)
-    X = data.drop(columns=['REASONb'])
-    y = data['REASONb']
+def get_scores(y_test, y_pred, y_pred_proba, binary=True):
+    metrics = {}
+    metrics["logloss"] = float(log_loss(y_test, y_pred_proba))
 
-    # 2. (중요) 범주형 변수의 데이터 타입을 'category'로 변경
-    # enable_categorical=True를 사용하기 위한 필수 단계입니다.
-    # 모든 피처를 범주형으로 가정합니다.
+    if binary:
+        try:
+            metrics["roc_auc"] = float(roc_auc_score(y_test, y_pred_proba))
+        except ValueError:
+            metrics["roc_auc"] = float("nan")
+        metrics["accuracy"] = float(accuracy_score(y_test, y_pred))
+        metrics["f1"] = float(f1_score(y_test, y_pred, zero_division=0))
+        metrics["precision"] = float(precision_score(y_test, y_pred, zero_division=0))
+        metrics["recall"] = float(recall_score(y_test, y_pred, zero_division=0))
+    else:
+        # NOTE:
+        # Multiclass ROC-AUC is intentionally omitted due to instability and limited interpretability.
+        metrics["accuracy"] = float(accuracy_score(y_test, y_pred))
+        metrics["f1_macro"] = float(f1_score(y_test, y_pred, average="macro", zero_division=0))
+        metrics["precision_macro"] = float(precision_score(y_test, y_pred, average="macro", zero_division=0))
+        metrics["recall_macro"] = float(recall_score(y_test, y_pred, average="macro", zero_division=0))
+
+    for k, v in metrics.items():
+        print(f"{k}: {v:.6f}" if isinstance(v, float) else f"{k}: {v}")
+
+    return metrics
+
+def get_feature_importance(X_train, final_xgb_model, save_dir: str):
+    feature_names = X_train.columns
+    importances = final_xgb_model.feature_importances_
+    feature_series = pd.Series(importances, index=feature_names).sort_values(ascending=False)
+
+    print("\n--- Feature Importance ---")
+    print(feature_series)
+
+    # save csv
+    csv_path = os.path.join(save_dir, "xgboost_feature_importance.csv")
+    feature_series.to_csv(csv_path, header=["importance"])
+
+    # save plot
+    plt.figure(figsize=(12, 8))
+    feature_series.plot(kind="bar")
+    plt.title("XGBoost Feature Importance")
+    plt.ylabel("Importance Score")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "xgboost_feature_importance.png"), dpi=200)
+    plt.close()
+
+
+def _train_xgboost_binary(train_idx: list, val_idx: list, test_idx: list, df: pd.DataFrame, cfg):
+    X = df.drop(columns=["REASONb"])
+    y = df['REASONb'].copy()
+
     print("Converting feature dtypes to 'category'...")
     X = X.astype('category')
     print("Data types converted.")
 
-    # 3. 데이터 분할
-    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
-    _, X_test, _, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+    X_train = X.iloc[train_idx]
+    y_train = y.iloc[train_idx] # type: ignore
 
-    # 4. 최종 모델 학습 및 X_test로 평가
+    X_val = X.iloc[val_idx]
+    y_val = y.iloc[val_idx] # type: ignore
+
+    X_test = X.iloc[test_idx]
+    y_test = y.iloc[test_idx] # type: ignore
+
     print("\n--- Training final model and evaluating with X_test ---")
 
     final_xgb_model = XGBClassifier(
-        tree_method="hist",
+        tree_method=cfg["train"]["tree_method"],
         enable_categorical=True,
-        n_estimators=100,
-        learning_rate=0.1,
-        max_depth=5,
-        eval_metric='logloss',
-        random_state=42
+        n_estimators=cfg["train"]["n_estimators"],
+        learning_rate=cfg["train"]["learning_rate"],
+        max_depth=cfg["train"]["max_depth"],
+        eval_metric=cfg["train"]["eval_metric"],
+        random_state=cfg["train"]["seed"]
     )
-    final_xgb_model.fit(X_train, y_train)
 
-    # X_test에 대한 예측 수행
+    if cfg["train"]["do_cross_validation"]:
+        final_xgb_model = cross_validate(final_xgb_model, X_train, y_train, cfg)
+
+    else:
+        final_xgb_model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=1)
+
     y_pred_proba = final_xgb_model.predict_proba(X_test)[:, 1]
     y_pred = final_xgb_model.predict(X_test)
+    return final_xgb_model, X_train, y_test, y_pred, y_pred_proba
 
-    # 평가 지표 계산
-    test_logloss = log_loss(y_test, y_pred_proba)
-    test_roc_auc = roc_auc_score(y_test, y_pred_proba)
-    test_accuracy = final_xgb_model.score(X_test, y_test)
-    test_f1_score = f1_score(y_test, y_pred)
-    test_precision = precision_score(y_test, y_pred)
-    test_recall = recall_score(y_test, y_pred)
+def _train_xgboost_multi(train_idx: list, val_idx: list, test_idx: list, df: pd.DataFrame, cfg):
+    X = df.drop(columns=["REASON"])
+    y = df["REASON"].copy()
 
-    print(f"Final Test Log Loss (BCE): {test_logloss:.4f}")
-    print(f"Final Test ROC-AUC: {test_roc_auc:.4f}")
-    print(f"Final Test Accuracy: {test_accuracy:.4f}")
-    print(f"Final Test F1-Score: {test_f1_score:.4f}")
-    print(f"Final Test Precision: {test_precision:.4f}")
-    print(f"Final Test Recall: {test_recall:.4f}")
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+    K = len(le.classes_)
+
+    X = X.astype("category")
+
+    X_train = X.iloc[train_idx]
+    y_train = y_encoded[train_idx] # type: ignore
+
+    X_val = X.iloc[val_idx]
+    y_val = y_encoded[val_idx] # type: ignore
+
+    X_test = X.iloc[test_idx] 
+    y_test = y_encoded[test_idx] # type: ignore
+        
+    final_xgb_model = XGBClassifier(
+        objective="multi:softprob",
+        num_class=K,
+        eval_metric="mlogloss",
+        tree_method=cfg["train"]["tree_method"],
+        enable_categorical=True,
+        n_estimators=cfg["train"]["n_estimators"],
+        learning_rate=cfg["train"]["learning_rate"],
+        max_depth=cfg["train"]["max_depth"],
+        random_state=cfg["train"]["seed"],
+    )
+
+    if cfg["train"]["do_cross_validation"]:
+        final_xgb_model = cross_validate(final_xgb_model, X_train, y_train, cfg)
+    else:
+        final_xgb_model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=1)
+
+    y_pred_proba = final_xgb_model.predict_proba(X_test)
+    y_pred = final_xgb_model.predict(X_test)   # 평가용(정수)
+
+    # For human-readable purposes
+    # y_pred_label = le.inverse_transform(y_pred)
+
+    return final_xgb_model, X_train, y_test, y_pred, y_pred_proba, le
 
 
+def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger, cfg):
+    if cfg["train"]["binary"]:
+        final_xgb_model, X_train, y_test, y_pred, y_pred_proba = _train_xgboost_binary(
+            train_idx, val_idx, test_idx, df, cfg
+        )
+        metrics = get_scores(y_test, y_pred, y_pred_proba, binary=True)
+    else:
+        final_xgb_model, X_train, y_test, y_pred, y_pred_proba, le = _train_xgboost_multi(
+            train_idx, val_idx, test_idx, df, cfg
+        )
+        metrics = get_scores(y_test, y_pred, y_pred_proba, binary=False)
 
-    # 5. 최종 모델의 피처 중요도 시각화
-    print("\n--- Feature Importance (Gain) ---")
-    feature_names = X_train.columns
-    importances = final_xgb_model.feature_importances_
-    feature_series = pd.Series(importances, index=feature_names)
-    sorted_importances = feature_series.sort_values(ascending=False)
+        y_pred_label = le.inverse_transform(y_pred)
+        print("Pred label examples:", y_pred_label[:10])
 
-    print(sorted_importances)
+    logger.log_metrics(epoch=0, metrics={"split": "test", **metrics})
+    get_feature_importance(X_train, final_xgb_model, save_dir=logger.run_dir)
 
-    plt.figure(figsize=(12, 8))
-    sorted_importances.plot(kind='bar')
-    plt.title('Feature Importance (Gain)')
-    plt.ylabel('Importance Score')
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    plt.show()
+    # model save
+    final_xgb_model.get_booster().save_model(
+        os.path.join(logger.run_dir, "xgboost.json")
+    )
 
-if __name__ == '__main__':
-    main()
+

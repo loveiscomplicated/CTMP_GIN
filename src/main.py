@@ -101,8 +101,8 @@ def main():
 
     if cfg["model"]["name"] == "xgboost":
         from src.models.xgboost import train_xgboost
-        train_idx, _, test_idx = idx
-        return train_xgboost(train_idx, test_idx, dataset.processed_df, logger)
+        train_idx, val_idx, test_idx = idx
+        return train_xgboost(train_idx, val_idx, test_idx, dataset.processed_df, logger, cfg)
 
     # build model
     model = build_model(

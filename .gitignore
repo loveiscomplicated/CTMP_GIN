@@ -16,3 +16,4 @@ src/trainers/utils/__pycache__
 src/models/entity_embedding/__pycache__
 src/trainers/__pycache__
 .vscode
+src/models/xgboost/__pycache__
