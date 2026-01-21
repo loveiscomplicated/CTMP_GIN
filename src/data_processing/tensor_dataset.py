@@ -127,9 +127,11 @@ class TEDSTensorDataset(Dataset):
         # get col infos, list of (col_list, col_dims, ad_col_index, dis_col_index)
         # ad_col_index, dis_col_index: integer position of admission col, discharge col
         if self.binary:
+            self.num_classes = len(df["REASONb"].unique())
             df = df.drop("REASONb", axis=1)
             col_info = get_col_info(df)
         else:
+            self.num_classes = len(df["REASON"].unique())
             df = df.drop("REASON", axis=1)
             col_info = get_col_info(df)
 

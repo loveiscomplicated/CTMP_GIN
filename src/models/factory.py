@@ -16,6 +16,10 @@ MODEL_REGISTRY = {
 def build_model(model_name: str, device: torch.device, **kwargs):
     if model_name not in MODEL_REGISTRY:
         raise ValueError(f"Unknown model: {model_name}")
+    
+    if kwargs["num_classes"] != 2:
+        model_name = model_name + "_m"
+        return MODEL_REGISTRY[model_name](device=device, **kwargs)
     return MODEL_REGISTRY[model_name](device=device, **kwargs)
 
 def build_edge(model_name: str, 

@@ -84,9 +84,9 @@ def main():
         root=root,
         binary=cfg["train"].get("binary", True),
     )
-    
+
     cfg["model"]["params"]["col_info"] = dataset.col_info
-    cfg["model"]["params"]["binary"] = cfg["train"].get("binary", True)
+    cfg["model"]["params"]["num_classes"] = dataset.num_classes
     
     num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
 
