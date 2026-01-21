@@ -12,13 +12,9 @@ model:
   name: gin
   params:
     embedding_dim: 32
-    gin_hidden_channel: 32
-    gin_1_layers: 2
-    gin_hidden_channel_2: 32
-    gin_2_layers: 2
+    gin_dim: 32
+    gin_layer_num: 3
     train_eps: True
-    los_embedding_dim: 8
-    gate_hidden_ch: null # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
 
 train:
   batch_size: 32
@@ -30,9 +26,6 @@ train:
   val_ratio: 0.15
   test_ratio: 0.15
   num_workers: 0
-  lr_scheduler_patience: 5
-  early_stopping_patience: 10
-  dropout_p: 0.2
+  lr_scheduler_patience: 10
+  early_stopping_patience: 15
   decision_threshold: 0.5
-
-

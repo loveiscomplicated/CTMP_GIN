@@ -4,11 +4,13 @@ import os
 from src.data_processing.mi_dict import search_mi_dict
 from src.data_processing.edge import fully_connected_edge_index_batched, mi_edge_index_batched, mi_edge_index_batched_for_a3tgcn, mi_edge_index_batched_for_gin
 from src.models.ctmp_gin import CTMPGIN
-
+from src.models.gin import GINBaseline,  GIN_m
 
 import torch
 MODEL_REGISTRY = {
     "ctmp_gin": CTMPGIN,
+    "gin": GINBaseline,
+    "gin_m": GIN_m
 }
 
 def build_model(model_name: str, device: torch.device, **kwargs):
@@ -20,7 +22,6 @@ def build_edge(model_name: str,
                root: str,
                seed: int,
                train_df: pandas.DataFrame,
-               device: torch.device, 
                num_nodes: int,
                batch_size: int,
                **kwargs):

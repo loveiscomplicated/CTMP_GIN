@@ -86,6 +86,8 @@ def main():
     )
     
     cfg["model"]["params"]["col_info"] = dataset.col_info
+    cfg["model"]["params"]["binary"] = cfg["train"].get("binary", True)
+    
     num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
 
     # create dataloaders
@@ -119,7 +121,6 @@ def main():
                             root=root,
                             seed=seed,
                             train_df=train_df,
-                            device=device,
                             num_nodes=num_nodes,
                             batch_size = cfg["train"]["batch_size"],
                             **cfg.get("edge", {})

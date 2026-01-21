@@ -6,10 +6,11 @@ from torch_geometric.nn import GINConv
 from src.models.entity_embedding import EntityEmbeddingBatch3
 
 class GINBaseline(nn.Module):
-    def __init__(self, embedding_dim, col_dims, gin_dim, gin_layer_num, train_eps=True) -> None:
+    def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, device, train_eps=True) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
-        self.col_dims = col_dims
+        self.col_dims = col_info[1] # col_info: (col_list, col_dims, ad_col_index, dis_col_index) 
+        self.col_dims.append(37) # LOS needs to be included in GIN, as it's excluded in col_info.
         self.gin_dim = gin_dim
         self.gin_layer_num = gin_layer_num
         self.train_eps = train_eps
@@ -52,7 +53,7 @@ class GINBaseline(nn.Module):
             nn.Linear(self.classifier_b_dim * 2, 1)
         )
 
-    def forward(self, x, edge_index, **kwargs):
+    def forward(self, x, los, edge_index, **kwargs):
         # initial setting
         if x.ndim == 1:
             batch_size = 1
@@ -62,9 +63,11 @@ class GINBaseline(nn.Module):
         else:
             raise ValueError("incorrect x dim")
         
+        los = los.unsqueeze(dim=1)
+        x = torch.cat((x, los), dim=1)
+
         num_nodes = x.shape[1]
 
-        
         # entity embedding
         x_embedded = self.entity_embedding_layer(x) # [batch, num_var, entity_emb_dim]
 
@@ -80,3 +83,52 @@ class GINBaseline(nn.Module):
 
         # classifier
         return self.classifier_b(graph_emb)
+    
+class GIN_m(nn.Module):
+    def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, device, num_classes, train_eps=True) -> None:
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.col_dims = col_info[1] # col_info: (col_list, col_dims, ad_col_index, dis_col_index) 
+        self.col_dims.append(37) # LOS needs to be included in GIN, as it's excluded in col_info.
+        self.gin_dim = gin_dim
+        self.gin_layer_num = gin_layer_num
+        self.train_eps = train_eps
+
+        self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, 
+                                                            embedding_dim=embedding_dim)
+        
+        gin_nn_input = nn.Sequential(
+             nn.Linear(embedding_dim, gin_dim),
+             nn.LayerNorm(gin_dim),
+             nn.ReLU(),
+
+             nn.Linear(gin_dim, gin_dim) # 논문에서 적용된 배치 정규화 
+             # nn.LayerNorm(h_dim),  # 마지막 레이어 이후에는 선택적
+        )
+
+        gin_nn = nn.Sequential(
+             nn.Linear(gin_dim, gin_dim),
+             nn.LayerNorm(gin_dim),
+             nn.ReLU(),
+
+             nn.Linear(gin_dim, gin_dim) # 논문에서 적용된 배치 정규화 
+             # nn.LayerNorm(h_dim),  # 마지막 레이어 이후에는 선택적
+        )
+
+        self.gin_layers = nn.ModuleList()
+
+        gin_layer1 = GINConv(nn=gin_nn_input, eps=0, train_eps=self.train_eps)
+        self.gin_layers.append(gin_layer1)
+        
+        for _ in range(self.gin_layer_num - 1):
+            gin_layer_hidden = GINConv(nn=gin_nn, eps=0, train_eps=self.train_eps)
+            self.gin_layers.append(gin_layer_hidden)
+        
+        # 분류기 레이어 정의
+        self.classifier_dim = self.gin_dim * self.gin_layer_num
+        self.classifier = nn.Sequential(
+            nn.Linear(self.classifier_dim, self.classifier_dim * 2),
+            nn.ReLU(),
+            nn.Linear(self.classifier_dim * 2, num_classes)
+        )
+        
