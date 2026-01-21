@@ -105,7 +105,8 @@ def df_to_tensor(df: pd.DataFrame | pd.Series, dtype=torch.long):
 def train_test_split_stratified(dataset, batch_size,
                               ratio=[0.7, 0.15, 0.15],
                               seed=42,
-                              num_workers=0):
+                              num_workers=0,
+                              ):
 
     assert abs(sum(ratio) - 1.0) < 1e-6, "ratio must sum to 1.0"
     torch.manual_seed(seed)
@@ -160,4 +161,4 @@ def train_test_split_stratified(dataset, batch_size,
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size,
                                  shuffle=False, num_workers=num_workers, drop_last=True)
 
-    return train_dataloader, val_dataloader, test_dataloader, train_idx
+    return train_dataloader, val_dataloader, test_dataloader, (train_idx, val_idx, test_idx)

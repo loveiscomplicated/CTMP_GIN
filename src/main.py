@@ -90,12 +90,19 @@ def main():
 
     # create dataloaders
     split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
-    train_loader, val_loader, test_loader, train_idx = train_test_split_stratified(dataset=dataset, 
+    train_loader, val_loader, test_loader, idx = train_test_split_stratified(dataset=dataset,  # type: ignore
                                                                                    batch_size=cfg['train']['batch_size'],
                                                                                    ratio=split_ratio,
                                                                                    seed=seed,
-                                                                                   num_workers=cfg['train']['num_workers'])
-    train_df = dataset.processed_df.iloc[train_idx]
+                                                                                   num_workers=cfg['train']['num_workers'],
+                                                                                   )
+    
+    train_df = dataset.processed_df.iloc[idx[0]]
+
+    if cfg["model"]["name"] == "xgboost":
+        from src.models.xgboost import train_xgboost
+        train_idx, _, test_idx = idx
+        return train_xgboost(train_idx, test_idx, dataset.processed_df, logger)
 
     # build model
     model = build_model(
