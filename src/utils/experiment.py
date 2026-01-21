@@ -31,7 +31,7 @@ def make_run_id(cfg: Dict[str, Any]) -> str:
 
     train = cfg.get("train", {})
     bs = train.get("batch_size", "NA")
-    lr = train.get("lr", "NA")
+    lr = train.get("learning_rate", "NA")
     seed = train.get("seed", "NA")
 
     parts = [
