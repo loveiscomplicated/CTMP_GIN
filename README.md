@@ -35,9 +35,20 @@ python -c "import torch_geometric; print(torch_geometric.__version__)"
 
 ## Train
 
+### CTMP-GIN
+
 ```bash
 python src/main.py --config configs/ctmp_gin.yaml
 ```
+---
+### XGBoost
+
+XGBoost does not support configuration via command-line arguments. Please modify the required settings directly in `configs/xgboost.yaml` before running the experiment.
+
+```bash
+python src/main.py --config configs/xgboost.yaml
+```
+
 
 ### Config Overrides (CLI)
 

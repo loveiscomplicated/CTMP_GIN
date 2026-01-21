@@ -16,7 +16,7 @@ train:
   test_ratio: 0.15
   batch_size: 32
   num_workers: 0
-  do_cross_validation: True
+  do_cross_validation: False
   cv_random_or_grid: True # True for random, False for grid
 
 device: null
