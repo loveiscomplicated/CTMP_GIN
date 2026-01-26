@@ -18,3 +18,4 @@ src/trainers/__pycache__
 .vscode
 src/models/xgboost/__pycache__
 src/models/gin/__pycache__
+src/models/a3tgcn/__pycache__
