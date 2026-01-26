@@ -104,6 +104,7 @@ class GinGru(nn.Module):
                                      gin_hidden_channel과 동일하게 설정하여 시작하는 것이 좋음
         '''
         super().__init__()
+        self.num_classes = num_classes
         self.hidden_channel = gin_hidden_channel
 
         self.dropout_p = float(dropout_p)
@@ -154,11 +155,12 @@ class GinGru(nn.Module):
         self.gru_layer = GRU(input_size=gru_input_ch, hidden_size=gru_hidden_channel)
 
         # 분류기 레이어 정의
+        out_dim = 1 if self.num_classes == 2 else self.num_classes
         self.classifier_b = nn.Sequential(
             nn.Linear(gru_hidden_channel, gru_hidden_channel * 2),
             nn.ReLU(),
             nn.Dropout(self.dropout_p),
-            nn.Linear(gru_hidden_channel * 2, 1)
+            nn.Linear(gru_hidden_channel * 2, out_dim)
         )
         self.gin_nn_input = gin_nn_input
         self.gin_nn = gin_nn
