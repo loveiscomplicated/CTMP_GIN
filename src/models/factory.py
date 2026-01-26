@@ -5,11 +5,14 @@ from src.data_processing.mi_dict import search_mi_dict
 from src.data_processing.edge import fully_connected_edge_index_batched, mi_edge_index_batched, mi_edge_index_batched_for_a3tgcn, mi_edge_index_batched_for_gin
 from src.models.ctmp_gin import CTMPGIN, CTMPGIN_m
 from src.models.gin import GIN,  GIN_m
+from src.models.gingru import GinGru
 
 import torch
 MODEL_REGISTRY = {
     "ctmp_gin": CTMPGIN,
     "gin": GIN,
+    "gin_gru": GinGru,
+    
     "ctmp_gin_m": CTMPGIN_m,
     "gin_m": GIN_m
 }
