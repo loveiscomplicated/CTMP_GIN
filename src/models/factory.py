@@ -6,13 +6,15 @@ from src.data_processing.edge import fully_connected_edge_index_batched, mi_edge
 from src.models.ctmp_gin import CTMPGIN, CTMPGIN_m
 from src.models.gin import GIN,  GIN_m
 from src.models.gingru import GinGru, GinGru_m, GinGru_2_Point
+from src.models.a3tgcn import A3TGCN_manual
 
 import torch
 MODEL_REGISTRY = {
     "ctmp_gin": CTMPGIN,
     "gin": GIN,
     "gin_gru": GinGru,
-    
+    "a3tgcn": A3TGCN_manual,
+
     "ctmp_gin_m": CTMPGIN_m,
     "gin_m": GIN_m,
     "gin_gru_m": GinGru_m,
@@ -24,9 +26,9 @@ def build_model(model_name: str, **kwargs):
     if model_name not in MODEL_REGISTRY:
         raise ValueError(f"Unknown model: {model_name}")
     
-    if kwargs["num_classes"] != 2:
+    '''if kwargs["num_classes"] != 2:
         model_name = model_name + "_m"
-        return MODEL_REGISTRY[model_name](**kwargs)
+        return MODEL_REGISTRY[model_name](**kwargs)'''
     return MODEL_REGISTRY[model_name](**kwargs)
 
 def build_edge(model_name: str, 

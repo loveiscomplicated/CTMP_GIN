@@ -105,6 +105,10 @@ def main():
         from src.models.xgboost import train_xgboost
         train_idx, val_idx, test_idx = idx
         return train_xgboost(train_idx, val_idx, test_idx, dataset.processed_df, logger, cfg)
+    
+    if cfg["model"]["name"] == "a3tgcn":
+        cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
+        cfg["model"]["params"]["device"] = cfg.get("device", "cpu")
 
     # build model
     model = build_model(

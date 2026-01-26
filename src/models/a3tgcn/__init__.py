@@ -1,0 +1,1 @@
+from .model import A3TGCN_manual

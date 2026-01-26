@@ -151,6 +151,18 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
         print("Loading Cached file...")
         with open(mi_dict_path, 'rb') as f:
             mi_dict = pickle.load(f)
+
+        # If cached MI was computed on a different column set, recompute to avoid index mismatch.
+        cached_cols = list(mi_dict.keys())
+        current_cols = list(train_df.columns)
+        if cached_cols != current_cols:
+            print("Cached MI columns do not match current data. Recomputing MI...")
+            mi_dict = get_mi_dict(
+                train_df=train_df,
+                seed=seed,
+                mi_dict_path=mi_dict_path,
+                n_neighbors=n_neighbors,
+            )
     else:
         print("Calculating MI...")
         mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors) 
