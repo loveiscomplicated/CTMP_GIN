@@ -20,3 +20,6 @@ train:
   cv_random_or_grid: True # True for random, False for grid
 
 device: null
+
+
+# python -m src.main --config configs/xgboost.yaml
