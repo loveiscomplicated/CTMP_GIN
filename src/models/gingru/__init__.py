@@ -1,1 +1,1 @@
-from .model import GinGru
+from .model import GinGru, GinGru_m

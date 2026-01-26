@@ -114,6 +114,7 @@ def main():
     )
     model = model.to(device)
     total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(model)
     print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
 
     # build edge_index

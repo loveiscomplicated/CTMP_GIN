@@ -1,5 +1,5 @@
-device: null # if null, it automatically sets the available device. (cuda | mps | cpu)
-
+device: cpu # if null, it automatically sets the available device. (cuda | mps | cpu)
+            # it is often better to use cpu due to recurrent unit.
 edge:
   is_mi_based: True # if 0, it generates fully connected edge index.
   n_neighbors: 3 # NOTE: cv result of n_neighbors: 3
@@ -16,13 +16,14 @@ model:
     train_eps: True
     gin_layers: 2
     gru_hidden_channel: 64
+    dropout_p: 0.2
 
 train:
   batch_size: 32
   learning_rate: 0.001 # optimizer learning rate
   epochs: 100
   seed: 42  
-  binary: True
+  binary: False
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15

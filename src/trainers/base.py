@@ -24,6 +24,7 @@ def train(model, dataloader, criterion, optimizer, edge_index, binary, device):
             x_batch,
             los_batch,
             edge_index,
+            device=device,
         )
         if binary: 
             logits = logits.squeeze(1)
