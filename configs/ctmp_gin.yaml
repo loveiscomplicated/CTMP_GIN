@@ -20,6 +20,7 @@ model:
     train_eps: True
     los_embedding_dim: 8
     gate_hidden_ch: null # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
+    dropout_p: 0.3
 
 train:
   batch_size: 32
@@ -33,7 +34,6 @@ train:
   num_workers: 0
   lr_scheduler_patience: 5
   early_stopping_patience: 10
-  dropout_p: 0.2
   decision_threshold: 0.5
 
 
