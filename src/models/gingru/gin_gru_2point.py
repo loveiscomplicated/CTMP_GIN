@@ -9,7 +9,7 @@ cur_dir = os.path.dirname(__file__)
 parent_dir = os.path.join(cur_dir, '..')
 sys.path.append(parent_dir)
 
-from .entity_embedding import EntityEmbeddingBatch3
+from src.models.entity_embedding import EntityEmbeddingBatch3
 
 
 def append_los_to_vars(x: torch.Tensor, los_batch: torch.Tensor, max_los: float = 37.0):
@@ -67,39 +67,35 @@ def separate_x(x: torch.Tensor, ad_idx_t: torch.Tensor, dis_idx_t: torch.Tensor)
     return torch.cat([ad_tensor, dis_tensor], dim=0)           # [B*2, N, F]
 
 
-class GinGru(nn.Module):
+class GinGru_2_Point(nn.Module):
     def __init__(
         self,
-        batch_size,
-        col_list,
-        col_dims,
-        ad_col_index,
-        dis_col_index,
+        col_info,
         embedding_dim,
         gin_hidden_channel,
         train_eps,
         gin_layers,
         gru_hidden_channel,
+        num_classes,
         dropout_p: float = 0.2,
-        gin_out_dropout_p=None,
+        gin_layer_out_dropout_p: float = 0.2,
+        gru_layer_out_dropout_p: float = 0.2,
         max_los_norm: float = 37.0,  # LOS feature scaling divisor
     ):
         super().__init__()
-        self.batch_size = batch_size
-        self.col_dims = col_dims
-        self.col_list = col_list
         self.hidden_channel = gin_hidden_channel
-
         self.dropout_p = float(dropout_p)
-        self.gin_out_dropout_p = float(gin_out_dropout_p) if gin_out_dropout_p is not None else float(dropout_p)
+        self.gin_layer_out_dropout_p = float(gin_layer_out_dropout_p) 
+        self.gru_layer_out_dropout_p = float(gru_layer_out_dropout_p)
         self.max_los_norm = float(max_los_norm) if max_los_norm is not None else None
 
-        self.dropout_gin_out = nn.Dropout(self.gin_out_dropout_p)
-        self.dropout_after_gru = nn.Dropout(self.dropout_p)
+        self.gin_layer_out_dropout = nn.Dropout(self.gin_layer_out_dropout_p)
+        self.gru_layer_out_dropout = nn.Dropout(self.gru_layer_out_dropout_p)
 
-        # indices (moved to device inside forward)
-        self.ad_idx_t = torch.tensor(ad_col_index, dtype=torch.long)
-        self.dis_idx_t = torch.tensor(dis_col_index, dtype=torch.long)
+        # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+        self.col_list, self.col_dims, ad_col_index, dis_col_index = col_info
+        self.ad_idx_t = torch.tensor(ad_col_index)
+        self.dis_idx_t = torch.tensor(dis_col_index)
 
         # Entity Embedding
         self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, embedding_dim=embedding_dim)
@@ -178,7 +174,7 @@ class GinGru(nn.Module):
         sum_pooled = []
         for layer in self.gin_layers:
             x_after_gin = layer(x_after_gin, template_edge_index)   # [B*2*N, gin_hidden_channel]
-            x_after_gin = self.dropout_gin_out(x_after_gin)
+            x_after_gin = self.gin_layer_out_dropout(x_after_gin)
 
             x_graph = x_after_gin.reshape(batch_size * 2, num_nodes, self.hidden_channel)  # [B*2, N, H]
             x_sum = torch.sum(x_graph, dim=1)  # [B*2, H]
@@ -192,7 +188,7 @@ class GinGru(nn.Module):
         # GRU
         _, gru_h = self.gru_layer(gru_input)  # gru_h: [1, B, gru_hidden_channel]
         gru_h = gru_h.squeeze(0)              # [B, gru_hidden_channel]
-        gru_h = self.dropout_after_gru(gru_h)
+        gru_h = self.gru_layer_out_dropout(gru_h)
 
         # Classifier
         return self.classifier_b(gru_h)       # [B, 1]
@@ -214,7 +210,148 @@ class GinGru(nn.Module):
                     nn.init.zeros_(m.bias)
 
 
-if __name__ == "__main__":
-    from teds_tensor_dataset import TEDSTensorDataset
 
-    dataset = TEDSTensorDataset(root=cur_dir)
+
+class GinGru_2_Point_m(nn.Module):
+    def __init__(
+        self,
+        col_info,
+        embedding_dim,
+        gin_hidden_channel,
+        train_eps,
+        gin_layers,
+        gru_hidden_channel,
+        num_classes,
+        dropout_p: float = 0.2,
+        gin_layer_out_dropout_p: float = 0.2,
+        gru_layer_out_dropout_p: float = 0.2,
+        max_los_norm: float = 37.0,  # LOS feature scaling divisor
+    ):
+        super().__init__()
+        self.hidden_channel = gin_hidden_channel
+        self.dropout_p = float(dropout_p)
+        self.gin_layer_out_dropout_p = float(gin_layer_out_dropout_p) 
+        self.gru_layer_out_dropout_p = float(gru_layer_out_dropout_p)
+        self.max_los_norm = float(max_los_norm) if max_los_norm is not None else None
+
+        self.gin_layer_out_dropout = nn.Dropout(self.gin_layer_out_dropout_p)
+        self.gru_layer_out_dropout = nn.Dropout(self.gru_layer_out_dropout_p)
+
+        # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+        self.col_list, self.col_dims, ad_col_index, dis_col_index = col_info
+        self.ad_idx_t = torch.tensor(ad_col_index)
+        self.dis_idx_t = torch.tensor(dis_col_index)
+
+        # Entity Embedding
+        self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, embedding_dim=embedding_dim)
+
+        # GIN MLPs
+        gin_nn_input = nn.Sequential(
+            nn.Linear(embedding_dim + 1, gin_hidden_channel),  # +1 for LOS
+            nn.LayerNorm(gin_hidden_channel),
+            nn.ReLU(),
+            nn.Dropout(self.dropout_p),
+            nn.Linear(gin_hidden_channel, gin_hidden_channel),
+        )
+
+        gin_nn = nn.Sequential(
+            nn.Linear(gin_hidden_channel, gin_hidden_channel),
+            nn.LayerNorm(gin_hidden_channel),
+            nn.ReLU(),
+            nn.Dropout(self.dropout_p),
+            nn.Linear(gin_hidden_channel, gin_hidden_channel),
+        )
+
+        # GIN layers
+        self.gin_layers = nn.ModuleList()
+        self.gin_layers.append(GINConv(nn=gin_nn_input, eps=0, train_eps=train_eps))
+        for _ in range(gin_layers - 1):
+            self.gin_layers.append(GINConv(nn=gin_nn, eps=0, train_eps=train_eps))
+
+        # GRU
+        gru_input_ch = gin_hidden_channel * gin_layers
+        self.gru_layer = GRU(input_size=gru_input_ch, hidden_size=gru_hidden_channel)  # batch_first=False
+
+        # Classifier
+        self.classifier = nn.Sequential(
+            nn.Linear(gru_hidden_channel, gru_hidden_channel * 2),
+            nn.ReLU(),
+            nn.Dropout(self.dropout_p),
+            nn.Linear(gru_hidden_channel * 2, num_classes),
+        )
+
+        # keep refs for reset_parameters
+        self.gin_nn_input = gin_nn_input
+        self.gin_nn = gin_nn
+
+        self.reset_parameters()
+
+    def forward(self, x_batch: torch.Tensor, LOS_batch: torch.Tensor, template_edge_index, device):
+        """
+        Args:
+            x_batch: [B, V]  categorical variable indices (pre-embedding)
+            LOS_batch: [B]
+            template_edge_index: edge_index for the *flattened batch graph* (supersized / block-diagonal)
+            device: torch device
+
+        Returns:
+            logits: [B, 1]
+        """
+        ad_idx_t = self.ad_idx_t.to(device)
+        dis_idx_t = self.dis_idx_t.to(device)
+
+        batch_size = x_batch.shape[0]
+        num_nodes = int(ad_idx_t.numel())
+
+        # Embed variables: [B, V, embedding_dim]
+        x_embedded = self.entity_embedding_layer(x_batch)
+
+        # Append LOS as node/variable feature: [B, V, embedding_dim + 1]
+        x_embedded = append_los_to_vars(x_embedded, LOS_batch, max_los=self.max_los_norm)
+
+        # Select admission/discharge variable sets and concat along batch: [B*2, N, F]
+        x_separated = separate_x(x_embedded, ad_idx_t=ad_idx_t, dis_idx_t=dis_idx_t)
+
+        # Flatten into [B*2*N, F]
+        x_after_gin = x_separated.reshape(batch_size * 2 * num_nodes, -1)
+
+        # Apply GIN layers, sum-pool per graph at each layer, then concat pooled outputs
+        sum_pooled = []
+        for layer in self.gin_layers:
+            x_after_gin = layer(x_after_gin, template_edge_index)   # [B*2*N, gin_hidden_channel]
+            x_after_gin = self.gin_layer_out_dropout(x_after_gin)
+
+            x_graph = x_after_gin.reshape(batch_size * 2, num_nodes, self.hidden_channel)  # [B*2, N, H]
+            x_sum = torch.sum(x_graph, dim=1)  # [B*2, H]
+            sum_pooled.append(x_sum)
+
+        gin_result = torch.cat(sum_pooled, dim=1)  # [B*2, H * num_layers]
+
+        # 2-step temporal sequence for GRU: [2, B, H*num_layers]
+        gru_input = to_two_step_sequence(gin_result)
+
+        # GRU
+        _, gru_h = self.gru_layer(gru_input)  # gru_h: [1, B, gru_hidden_channel]
+        gru_h = gru_h.squeeze(0)              # [B, gru_hidden_channel]
+        gru_h = self.gru_layer_out_dropout(gru_h)
+
+        # Classifier
+        return self.classifier(gru_h)       # [B, 1]
+
+    def reset_parameters(self):
+        # GIN MLPs
+        for block in [self.gin_nn_input, self.gin_nn]:
+            for m in block.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+
+        # Classifier
+        for m in self.classifier.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+

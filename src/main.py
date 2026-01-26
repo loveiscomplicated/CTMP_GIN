@@ -109,7 +109,6 @@ def main():
     # build model
     model = build_model(
         model_name=cfg["model"]["name"],
-        device=device,
         **cfg["model"].get("params", {})
     )
     model = model.to(device)

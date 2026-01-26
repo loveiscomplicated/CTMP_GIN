@@ -241,7 +241,6 @@ class GinGru_m(nn.Module):
                  train_eps, 
                  gin_layers, 
                  gru_hidden_channel, 
-                 device,
                  num_classes,
                  dropout_p: float = 0.2,          
                  gin_out_dropout_p = None):

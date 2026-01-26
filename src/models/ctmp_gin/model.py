@@ -38,7 +38,7 @@ from src.models.entity_embedding import EntityEmbeddingBatch3
         return fused, w
 '''
 
-def seperate_x(x: torch.Tensor, ad_idx_t, dis_idx_t, device):
+def seperate_x(x: torch.Tensor, ad_idx_t, dis_idx_t):
     ad_tensor = torch.index_select(x, dim=1, index=ad_idx_t) # [B, 60, F]
     dis_tensor = torch.index_select(x, dim=1, index=dis_idx_t) # [B, 60, F]
     return torch.concatenate((ad_tensor, dis_tensor), dim=0) # [B*2, 60, F]
@@ -173,7 +173,8 @@ class CTMPGIN(nn.Module):
         num_nodes = len(self.ad_idx_t)
         device = kwargs["device"]
         self.ad_idx_t = self.ad_idx_t.to(device)
-        
+        self.dis_idx_t = self.dis_idx_t.to(device)
+
         # x_batch shape: [batch_size, num_var(=72)]
         x_embedded = self.entity_embedding_layer(x) # shape: [batch, num_var, feature_dim]
 
@@ -181,8 +182,8 @@ class CTMPGIN(nn.Module):
         # 위와 같이 되어야 함: 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, ...
         x_seperated = seperate_x(x=x_embedded, # [B*2, 60, 32]
                                  ad_idx_t=self.ad_idx_t, 
-                                 dis_idx_t=self.dis_idx_t, 
-                                 device=self.device)
+                                 dis_idx_t=self.dis_idx_t,
+                                 )
 
         # GIN_1에 입력
         x_flatten = x_seperated.reshape(batch_size * 2 * num_nodes, -1)
@@ -272,7 +273,6 @@ class CTMPGIN_m(nn.Module):
                  gin_hidden_channel_2, # Must match the first GIN's dimensions to avoid errors; 
                                        # otherwise, a projection layer is required.  
                  gin_2_layers, 
-                 device,
                  num_classes,
                  dropout_p = 0.2,
                  los_embedding_dim=8, 
@@ -280,12 +280,11 @@ class CTMPGIN_m(nn.Module):
                  train_eps=True, 
                  gate_hidden_ch=None):
         super().__init__()
-        self.device = device
         self.dropout_p = dropout_p
 
         self.col_list, self.col_dims, self.ad_col_index, self.dis_col_index = col_info
-        self.ad_idx_t = torch.tensor(self.ad_col_index, dtype=torch.long, device=self.device)
-        self.dis_idx_t = torch.tensor(self.dis_col_index, dtype=torch.long, device=self.device)
+        self.ad_idx_t = torch.tensor(self.ad_col_index, dtype=torch.long)
+        self.dis_idx_t = torch.tensor(self.dis_col_index, dtype=torch.long)
 
         self.gin_hidden_channel = gin_hidden_channel
         self.gin_hidden_channel_2 = gin_hidden_channel_2
@@ -371,7 +370,10 @@ class CTMPGIN_m(nn.Module):
     def forward(self, x, los, edge_index, **kwargs):
         batch_size = x.shape[0]
         num_nodes = len(self.ad_idx_t)
-
+        device = kwargs["device"]
+        self.ad_idx_t = self.ad_idx_t.to(device)
+        self.dis_idx_t = self.dis_idx_t.to(device)
+        
         # x_batch shape: [batch_size, num_var(=72)]
         x_embedded = self.entity_embedding_layer(x) # shape: [batch, num_var, feature_dim]
 
@@ -380,7 +382,7 @@ class CTMPGIN_m(nn.Module):
         x_seperated = seperate_x(x=x_embedded, # [B*2, 60, 32]
                                  ad_idx_t=self.ad_idx_t, 
                                  dis_idx_t=self.dis_idx_t, 
-                                 device=self.device)
+        )
 
         # GIN_1에 입력
         x_flatten = x_seperated.reshape(batch_size * 2 * num_nodes, -1)

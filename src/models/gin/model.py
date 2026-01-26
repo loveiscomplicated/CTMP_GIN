@@ -85,7 +85,7 @@ class GIN(nn.Module):
         return self.classifier_b(graph_emb)
     
 class GIN_m(nn.Module):
-    def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, device, num_classes, train_eps=True) -> None:
+    def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, num_classes, train_eps=True) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
         self.col_dims = col_info[1] # col_info: (col_list, col_dims, ad_col_index, dis_col_index) 
