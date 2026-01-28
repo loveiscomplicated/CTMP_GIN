@@ -6,7 +6,14 @@ from torch_geometric.nn import GINConv
 from src.models.entity_embedding import EntityEmbeddingBatch3
 
 class GIN(nn.Module):
-    def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, num_classes, train_eps=True) -> None:
+    def __init__(self, 
+                 embedding_dim, 
+                 col_info, 
+                 gin_dim, 
+                 gin_layer_num, 
+                 num_classes, 
+                 train_eps=True,
+                 ) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
         self.col_dims = col_info[1] # col_info: (col_list, col_dims, ad_col_index, dis_col_index) 
@@ -14,6 +21,7 @@ class GIN(nn.Module):
         self.gin_dim = gin_dim
         self.gin_layer_num = gin_layer_num
         self.train_eps = train_eps
+        self.num_classes = num_classes
 
         self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, 
                                                             embedding_dim=embedding_dim)
@@ -46,11 +54,12 @@ class GIN(nn.Module):
             self.gin_layers.append(gin_layer_hidden)
 
         # 분류기 레이어 정의
-        self.classifier_b_dim = self.gin_dim * self.gin_layer_num
-        self.classifier_b = nn.Sequential(
-            nn.Linear(self.classifier_b_dim, self.classifier_b_dim * 2),
+        out_dim = 1 if self.num_classes == 2 else self.num_classes
+        self.classifier_dim = self.gin_dim * self.gin_layer_num
+        self.classifier = nn.Sequential(
+            nn.Linear(self.classifier_dim, self.classifier_dim * 2),
             nn.ReLU(),
-            nn.Linear(self.classifier_b_dim * 2, 1)
+            nn.Linear(self.classifier_dim * 2, out_dim)
         )
 
     def forward(self, x, los, edge_index, **kwargs):
@@ -82,7 +91,7 @@ class GIN(nn.Module):
         graph_emb = torch.cat(sum_pooled, dim=1) # [batch, feature_dim * layer_num]
 
         # classifier
-        return self.classifier_b(graph_emb)
+        return self.classifier(graph_emb)
     
 class GIN_m(nn.Module):
     def __init__(self, embedding_dim, col_info, gin_dim, gin_layer_num, num_classes, train_eps=True) -> None:

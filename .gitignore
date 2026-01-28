@@ -19,3 +19,4 @@ src/trainers/__pycache__
 src/models/xgboost/__pycache__
 src/models/gin/__pycache__
 src/models/a3tgcn/__pycache__
+src/models/gingru/__pycache__

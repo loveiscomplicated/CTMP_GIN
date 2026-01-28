@@ -22,7 +22,7 @@ train:
   learning_rate: 0.001 # optimizer learning rate
   epochs: 100
   seed: 42  
-  binary: False
+  binary: True
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15

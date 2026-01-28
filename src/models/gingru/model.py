@@ -156,7 +156,7 @@ class GinGru(nn.Module):
 
         # 분류기 레이어 정의
         out_dim = 1 if self.num_classes == 2 else self.num_classes
-        self.classifier_b = nn.Sequential(
+        self.classifier = nn.Sequential(
             nn.Linear(gru_hidden_channel, gru_hidden_channel * 2),
             nn.ReLU(),
             nn.Dropout(self.dropout_p),
@@ -218,7 +218,7 @@ class GinGru(nn.Module):
                       
 
         # Classifier에 입력
-        return self.classifier_b(gru_h)
+        return self.classifier(gru_h)
     
     def reset_parameters(self):
         # GIN MLP들
@@ -230,11 +230,13 @@ class GinGru(nn.Module):
                         nn.init.zeros_(m.bias)
 
         # classifier
-        for m in self.classifier_b.modules():
+        for m in self.classifier.modules():
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
+
+                    
 class GinGru_m(nn.Module):
     def __init__(self, 
                  col_info,

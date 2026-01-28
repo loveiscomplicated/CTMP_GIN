@@ -77,7 +77,7 @@ class A3TGCN_manual(nn.Module):
 
         # 분류기 레이어 정의
         out_dim = 1 if self.num_classes == 2 else self.num_classes
-        self.classifier_b = nn.Sequential(
+        self.classifier = nn.Sequential(
             nn.Linear(hidden_channel, hidden_channel * 2),
             nn.ReLU(),
             nn.Linear(hidden_channel * 2, out_dim),
@@ -95,5 +95,5 @@ class A3TGCN_manual(nn.Module):
         # global mean pooling [32, 60, 32] -> [32, 32]
         mean_pooled = torch.mean(after_GNN, dim=1)
 
-        return self.classifier_b(mean_pooled)
+        return self.classifier(mean_pooled)
     

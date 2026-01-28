@@ -83,6 +83,7 @@ class GinGru_2_Point(nn.Module):
         max_los_norm: float = 37.0,  # LOS feature scaling divisor
     ):
         super().__init__()
+        self.num_classes = num_classes
         self.hidden_channel = gin_hidden_channel
         self.dropout_p = float(dropout_p)
         self.gin_layer_out_dropout_p = float(gin_layer_out_dropout_p) 
@@ -128,11 +129,12 @@ class GinGru_2_Point(nn.Module):
         self.gru_layer = GRU(input_size=gru_input_ch, hidden_size=gru_hidden_channel)  # batch_first=False
 
         # Classifier
-        self.classifier_b = nn.Sequential(
+        out_dim = 1 if self.num_classes == 2 else self.num_classes
+        self.classifier = nn.Sequential(
             nn.Linear(gru_hidden_channel, gru_hidden_channel * 2),
             nn.ReLU(),
             nn.Dropout(self.dropout_p),
-            nn.Linear(gru_hidden_channel * 2, 1),
+            nn.Linear(gru_hidden_channel * 2, out_dim),
         )
 
         # keep refs for reset_parameters
@@ -191,7 +193,7 @@ class GinGru_2_Point(nn.Module):
         gru_h = self.gru_layer_out_dropout(gru_h)
 
         # Classifier
-        return self.classifier_b(gru_h)       # [B, 1]
+        return self.classifier(gru_h)       # [B, 1]
 
     def reset_parameters(self):
         # GIN MLPs
@@ -203,7 +205,7 @@ class GinGru_2_Point(nn.Module):
                         nn.init.zeros_(m.bias)
 
         # Classifier
-        for m in self.classifier_b.modules():
+        for m in self.classifier.modules():
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
