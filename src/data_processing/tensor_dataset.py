@@ -25,7 +25,7 @@ class TEDSTensorDataset(Dataset):
             (List of column indices at admission, list of column indices at discharge)
         LOS (pandas.Series): Length of Stay (LOS) information.
     """
-    def __init__(self, root:str, binary=True):
+    def __init__(self, root:str, binary=True, ig_label=False):
         """
         Constructor for the TEDSTensorDataset.
 
@@ -36,9 +36,11 @@ class TEDSTensorDataset(Dataset):
         Args:
             root (str): Root directory path where the dataset is stored.
             binary (bool): Whether to convert REASON into its binary form (REASONb).
+            ig_label (bool): Whether to newly include Neutral labels for Integrated Gradients
         """
         super().__init__()
         self.binary = binary
+        self.ig_label = ig_label
 
         self.root = root
         self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
@@ -221,4 +223,3 @@ class TEDSDatasetForGIN(Dataset):
         """
         return self.df_tensor.shape[0]
     
-

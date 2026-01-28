@@ -83,6 +83,7 @@ def main():
     dataset = TEDSTensorDataset(
         root=root,
         binary=cfg["train"].get("binary", True),
+        ig_label=cfg["train"].get("ig_label", False),
     )
 
     cfg["model"]["params"]["col_info"] = dataset.col_info
