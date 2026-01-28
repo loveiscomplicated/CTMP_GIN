@@ -6,6 +6,14 @@ import pandas as pd
 from sklearn.feature_selection import mutual_info_classif
 from .data_utils import get_ad_dis_col
 
+def _remove_target(df: pd.DataFrame):
+    cols = set(df.columns)
+    if 'REASON' in cols:
+        cols.discard('REASON')
+    if 'REASONb' in cols:
+        cols.discard('REASONb')
+    return df[list(cols)].copy(deep=True)
+
 def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
     """
     Compute mutual information (MI) between each column and all remaining columns.
@@ -40,6 +48,7 @@ def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str, n_neighbor
     Returns:
         dict: Mutual information dictionary.
     """
+    train_df = _remove_target(train_df)
     mi_dict = _get_mi_helper(train_df, seed, n_neighbors)
     with open(mi_dict_path, 'wb') as f:
         pickle.dump(mi_dict, f)
