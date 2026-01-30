@@ -8,11 +8,17 @@ def make_binary(df):
     df = df.drop(['REASON'], axis=1)
     return df
 
-def get_col_dims(df: pd.DataFrame):
-    '''
-    변수별 범주의 개수 파악
-    '''
-    col_dims = [len(df[col].unique()) for col in df.columns]
+def get_col_dims(df: pd.DataFrame, ig_label: bool = False):
+    col_dims = []
+
+    for col in df.columns:
+        vals = set(df[col].dropna().unique())
+
+        if ig_label:
+            vals.add(-9)  # baseline 항상 포함
+
+        col_dims.append(len(vals))
+
     return col_dims
 
 def get_ad_dis_col(df:pd.DataFrame, remove_los=False):
@@ -60,7 +66,7 @@ def get_ad_dis_index(df: pd.DataFrame, remove_los=True):
     dis_col_index = find_indices(col_list, dis)
     return ad_col_index, dis_col_index
 
-def get_col_info(df: pd.DataFrame, remove_los=True):
+def get_col_info(df: pd.DataFrame, remove_los: bool=True, ig_label: bool=False):
     '''
     Returns: (tuple)
         col_list, col_dims, ad_col_index, dis_col_index
@@ -71,11 +77,11 @@ def get_col_info(df: pd.DataFrame, remove_los=True):
         dis_col_index: discharge에 해당하는 변수의 integer position
     '''
     col_list = list(df.columns)
-    col_dims = get_col_dims(df)
+    col_dims = get_col_dims(df, ig_label)
     ad_col_index, dis_col_index = get_ad_dis_index(df, remove_los)
     return col_list, col_dims, ad_col_index, dis_col_index
 
-def organize_labels(df: pd.DataFrame):
+def organize_labels(df: pd.DataFrame, ig_labels: bool=False):
     '''
     -9가 있는 변수를 그대로 엔티티 임베딩에 넣으면 이상해짐
     왜냐하면 엔티티 임베딩 모델은 레이블들이 연속된 정수들의 범위로 있다고 가정하기 때문
@@ -83,19 +89,25 @@ def organize_labels(df: pd.DataFrame):
     -9, -8, -7, -6, -5, ~~~ 이런 것으로 가정함
 
     -9, 1, 2, 3를
-    0, 1, 2, 3으로 바꿈 (-9 -> 4)
+    0, 1, 2, 3으로 바꿈 (-9 -> 3)
     
     + CBSA2020
     이것도 문제가 됨
     10000 24242 32646 75577 이런 식이라 연속된 정수들의 레이블이 아님
     10000 24242 32646 75577 -> 1, 2, 3, 4
+
+    Args:
+        ig_labels (bool): include a new neutral label for Integrated Gradients. Optional, default: False 
     '''
-
     for col in df.columns:
-        labels = sorted(df[col].unique())
-        replace_dict = {labels[i]: i for i in range(len(labels))}
+        if col in {"REASON", "REASONb"}:
+            continue
+        labels = list(df[col].unique())
+        if ig_labels and (-9 not in labels):
+            labels.append(-9)
+        labels = sorted(labels)
+        replace_dict = {v: i for i, v in enumerate(labels)}
         df[col] = df[col].replace(replace_dict)
-
     return df
 
 def df_to_tensor(df: pd.DataFrame | pd.Series, dtype=torch.long):

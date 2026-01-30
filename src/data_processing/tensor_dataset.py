@@ -119,23 +119,23 @@ class TEDSTensorDataset(Dataset):
             columns.remove('REASON')
             columns.append('REASON')
             df = df[columns]
-            
-        # To use torch.Embedding, organizing label as successive integers is needed.
-        df = organize_labels(df)
+        
         self.processed_df = df
+
+        # To use torch.Embedding, organizing label as successive integers is needed.
+        df = organize_labels(df, self.ig_label)
         # make pd.DataFrame into torch.Tensor.
         df_tensor = df_to_tensor(df)
-        
         # get col infos, list of (col_list, col_dims, ad_col_index, dis_col_index)
         # ad_col_index, dis_col_index: integer position of admission col, discharge col
         if self.binary:
             self.num_classes = len(df["REASONb"].unique())
             df = df.drop("REASONb", axis=1)
-            col_info = get_col_info(df)
+            col_info = get_col_info(df, ig_label=self.ig_label)
         else:
             self.num_classes = len(df["REASON"].unique())
             df = df.drop("REASON", axis=1)
-            col_info = get_col_info(df)
+            col_info = get_col_info(df, ig_label=self.ig_label)
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         return df_tensor, col_info, LOS # -> self.process하면 tuple로 반환될 것

@@ -9,21 +9,37 @@ import yaml
 import argparse
 import torch
 import torch.nn as nn
-import pandas as pd
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
 from src.data_processing.tensor_dataset import TEDSTensorDataset, TEDSDatasetForGIN
 from src.data_processing.data_utils import train_test_split_stratified
 from src.models.factory import build_model, build_edge
-from src.trainers.base import run_train_loop
+from src.trainers.base import load_checkpoint
 from src.utils.experiment import make_run_id, ensure_run_dir, ExperimentLogger
 from src.utils.seed_set import set_seed
 from src.utils.device_set import device_set
 from src.trainers.utils.early_stopper import EarlyStopper
 
-cur_dir = os.path.dirname(__file__)
-root = os.path.join(cur_dir, 'data')
+from src.explainers.gb_ig import CTMPGIN_GBIGExplainer, compute_global_importance_on_loader, GlobalImportanceOutput
+from src.explainers.stablity_report import (
+    stability_report, 
+    print_stability_report, 
+    topk_indices, 
+    unstable_variables_report, 
+    print_unstable_report_with_names,
+    importance_mean_std_table
+)
 
+cur_dir = os.path.dirname(__file__)
+root = os.path.join(cur_dir, '..', 'data')
+save_path = os.path.join(cur_dir, 'results')
+if not os.path.exists(save_path):
+    os.makedirs(save_path, exist_ok=True)
+
+# --------@@@@ adjust model path !!! @@@@--------
+model_path = os.path.join(cur_dir, '..', '..', 'runs', 'temp_ctmp_gin_ckpt', '1218_ctmp_epoch_37_loss_0.2717.pth')
+
+# TODO add mode arg to select the explaination method, default: None -> do all method, make save path align according to this mode, add detailed configurations in this path 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=str, required=True) # config file location
@@ -37,7 +53,6 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--decision_threshold", type=float, default=None)
-    # TODO non-binary (Multiclass Classification) implement later
     p.add_argument("--binary", type=int, default=None)
     return p.parse_args()
 
@@ -70,12 +85,12 @@ def main():
     cfg = load_yaml(args.config)
     cfg = override_cfg(cfg, args)
 
-    run_id = make_run_id(cfg)
-    run_dir = ensure_run_dir("runs", run_id)
-    logger = ExperimentLogger(cfg, run_dir)
+    # run_id = make_run_id(cfg)
+    # run_dir = ensure_run_dir("runs", run_id)
+    # logger = ExperimentLogger(cfg, run_dir)
 
     seed = cfg["train"].get("seed", 42)
-    set_seed(seed) 
+    set_seed(seed)
 
     device = device_set(cfg["device"])
 
@@ -102,6 +117,7 @@ def main():
     
     train_df = dataset.processed_df.iloc[idx[0]]
 
+    '''    
     if cfg["model"]["name"] == "xgboost":
         from src.models.xgboost import train_xgboost
         train_idx, val_idx, test_idx = idx
@@ -110,6 +126,7 @@ def main():
     if cfg["model"]["name"] == "a3tgcn":
         cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
         cfg["model"]["params"]["device"] = device
+    '''
 
     # build model
     model = build_model(
@@ -144,23 +161,70 @@ def main():
     scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
     early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
 
-    run_train_loop(
+    load_checkpoint(
         model=model,
-        edge_index=edge_index,
-        binary=cfg["train"]["binary"],
-        train_dataloader=train_loader,
-        val_dataloader=val_loader,
-        test_dataloader=test_loader,
-        criterion=criterion,
         optimizer=optimizer,
         scheduler=scheduler,
-        early_stopper=early_stopper,
+        filename=model_path
+    )    
+    
+    explainer = CTMPGIN_GBIGExplainer(
+        model=model,
+        edge_index_vargraph=edge_index.detach().cpu(),
+        ad_indices=dataset.col_info[2],  # type: ignore
+        dis_indices=dataset.col_info[3], # type: ignore
+        baseline_strategy="farthest",
+        max_paths=1,            
+        use_abs=True,
         device=device,
-        logger=logger,
-        epochs=cfg["train"]["epochs"],
-        decision_threshold=cfg["train"]["decision_threshold"],
     )
     
+    rat = 0.05
+    outs = []
+    for s in [0, 1, 2]:
+        set_seed(s)
+        out = compute_global_importance_on_loader(
+            explainer=explainer,
+            model=model,
+            dataloader=test_loader,
+            edge_index=edge_index,
+            device=device,
+            sample_ratio=rat,
+            seed=s,
+            keep_all=False,
+            reduce="mean",
+            verbose=True,
+        )
+        outs.append(out.global_importance.cpu().float())  # [N]
+    
+    col_names = dataset.col_info[0]
+
+    # ---- after outs computed ----
+    df_ms = importance_mean_std_table(outs, col_names)
+
+    # 보기 편하게 top/bottom
+    print("\n=== Top 20 (mean ± std) ===")
+    print(df_ms.head(20).to_string(index=False))
+
+    print("\n=== Bottom 20 (mean ± std) ===")
+    print(df_ms.tail(20).to_string(index=False))
+
+    # CSV 저장
+    out_csv = os.path.join(save_path, "gbig_global_importance_mean_std.csv")
+    df_ms.to_csv(out_csv, index=False)
+    print(f"\nSaved: {out_csv}")
+
+    # get reports
+    report = stability_report(outs, ks=[10, 20, 30])
+    print_stability_report(report, ks=[10, 20, 30])
+
+    rep20 = unstable_variables_report(outs, k=20)
+    print_unstable_report_with_names(rep20, col_names)
+
+    rep30 = unstable_variables_report(outs, k=30)
+    print_unstable_report_with_names(rep30, col_names)
+    
+    # TODO include los into variable importances
 
 if __name__ == "__main__":
     main()

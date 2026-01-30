@@ -66,7 +66,10 @@ def evaluate(
             y_batch = y_batch.to(device)
             los_batch = los_batch.to(device)
 
-            logits = model(x_batch, los_batch, edge_index)
+            logits = model(x_batch, 
+                           los_batch, 
+                           edge_index, 
+                           device=device)
 
             if binary:
                 # logits: [B, 1] or [B]
