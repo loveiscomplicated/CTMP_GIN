@@ -1,3 +1,4 @@
+# explainer_main.py
 import os
 import sys
 from pathlib import Path
@@ -43,9 +44,6 @@ model_path = os.path.join(cur_dir, '..', '..', 'runs', 'temp_ctmp_gin_ckpt', '12
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=str, required=True) # config file location
-    # overrides
-    # p.add_argument("--model", type=str, default=None) no need, model selection only based on config
-    # more detailed adjustment able in config file
     p.add_argument("--is_mi_based_edge", type=int, default=None)
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--batch_size", type=int, default=None)
@@ -180,7 +178,9 @@ def main():
     )
     
     rat = 0.05
-    outs = []
+    outs_var = []
+    outs_ad = []
+    outs_dis = []
     for s in [0, 1, 2]:
         set_seed(s)
         out = compute_global_importance_on_loader(
@@ -195,35 +195,46 @@ def main():
             reduce="mean",
             verbose=True,
         )
-        outs.append(out.global_importance.cpu().float())  # [N]
-    
-    col_names = dataset.col_info[0]
+        outs_var.append(out.global_importance_var.cpu().float())  # [N]
+        outs_ad.append(out.global_importance_ad.cpu().float())
+        outs_dis.append(out.global_importance_dis.cpu().float())
+        
+    col_names, col_dims, ad_col_index, dis_col_index = dataset.col_info
+
+    col_names_ad = [col_names[i] for i in ad_col_index]
+    col_names_dis = [col_names[i] for i in dis_col_index]
 
     # ---- after outs computed ----
-    df_ms = importance_mean_std_table(outs, col_names)
+    # df_ms_var = importance_mean_std_table(outs_var, col_names_ad)
+    df_ms_ad = importance_mean_std_table(outs_ad, col_names_ad)
+    df_ms_dis = importance_mean_std_table(outs_dis, col_names_dis)
 
-    # 보기 편하게 top/bottom
-    print("\n=== Top 20 (mean ± std) ===")
-    print(df_ms.head(20).to_string(index=False))
+    def report(df_ms, outs, col_names, filename):
+        # 보기 편하게 top/bottom
+        print("\n=== Top 20 (mean ± std) ===")
+        print(df_ms.head(20).to_string(index=False))
 
-    print("\n=== Bottom 20 (mean ± std) ===")
-    print(df_ms.tail(20).to_string(index=False))
+        print("\n=== Bottom 20 (mean ± std) ===")
+        print(df_ms.tail(20).to_string(index=False))
 
-    # CSV 저장
-    out_csv = os.path.join(save_path, "gbig_global_importance_mean_std.csv")
-    df_ms.to_csv(out_csv, index=False)
-    print(f"\nSaved: {out_csv}")
+        # CSV 저장
+        out_csv = os.path.join(save_path, filename)
+        df_ms.to_csv(out_csv, index=False)
+        print(f"\nSaved: {out_csv}")
 
-    # get reports
-    report = stability_report(outs, ks=[10, 20, 30])
-    print_stability_report(report, ks=[10, 20, 30])
+        # get reports
+        report = stability_report(outs, ks=[10, 20, 30])
+        print_stability_report(report, ks=[10, 20, 30])
 
-    rep20 = unstable_variables_report(outs, k=20)
-    print_unstable_report_with_names(rep20, col_names)
+        rep20 = unstable_variables_report(outs, k=20)
+        print_unstable_report_with_names(rep20, col_names)
 
-    rep30 = unstable_variables_report(outs, k=30)
-    print_unstable_report_with_names(rep30, col_names)
-    
+        rep30 = unstable_variables_report(outs, k=30)
+        print_unstable_report_with_names(rep30, col_names)
+
+    report(df_ms_ad, outs_ad, col_names_ad, f"global_importance_ad_{seed}.csv")
+    report(df_ms_dis, outs_dis, col_names_dis, f"global_importance_dis_{seed}.csv")
+        
     # TODO include los into variable importances
 
 if __name__ == "__main__":

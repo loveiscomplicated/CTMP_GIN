@@ -1,3 +1,4 @@
+# gb_ig.py
 # --- drop-in replacement: path loops -> tensorized GPU compute ---
 # 핵심 아이디어:
 #   path를 "노드열"로 들고 있지 말고, 각 path를 (u_idx, w_idx) 엣지 인덱스 쌍으로 캐시해둔다.
@@ -7,7 +8,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Literal
-
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -223,7 +223,7 @@ def gbig_score_for_node_tensorized(
             path_scores.append(X.new_tensor(0.0))
             continue
 
-        u = u_cpu.to(device, non_blocking=True)
+        u = u_cpu.to(device, non_blocking=True) # non_blocking=True -> optimization (data operation)
         w = w_cpu.to(device, non_blocking=True)
 
         # [E, F]
@@ -233,8 +233,8 @@ def gbig_score_for_node_tensorized(
         # [E] = sum_F delta*gu
         edge_contrib = (delta * gu).sum(dim=-1)
 
-        # scalar
-        path_scores.append(edge_contrib.sum())
+        # scalar with 
+        path_scores.append(edge_contrib.mean())
 
     scores = torch.stack(path_scores, dim=0)  # [P]
     return scores.mean() if use_mean else scores.sum()
@@ -337,11 +337,11 @@ class CTMPGIN_GBIGExplainer:
         device = self._infer_device(x)
         self.model.eval()
 
-        B = x.size(0)
+        B = x.size(0) # batch_size
         N = self.num_nodes
 
-        gbig_ad_all = torch.zeros((B, N), device=device)
-        gbig_dis_all = torch.zeros((B, N), device=device)
+        gbig_ad_all = torch.zeros((B, N), device=device) # type: ignore
+        gbig_dis_all = torch.zeros((B, N), device=device) # type: ignore
 
         self._register_embedding_hook()
         try:
@@ -349,31 +349,36 @@ class CTMPGIN_GBIGExplainer:
                 self.model.zero_grad(set_to_none=True)
                 self._captured_emb = None
 
-                out = self.model(x, los, edge_index, device=device)
+                # ✅ 핵심: 샘플 1개만 forward
+                x_i = x[i:i+1]       # [1, ...]
+                los_i = los[i:i+1]   # [1]
 
+                out = self.model(x_i, los_i, edge_index, device=device)
+
+                # out shape 처리 (샘플이 1개이므로 out[0]만 보면 됨)
                 if out.dim() == 2 and out.size(1) == 1:
-                    scalar = out[i, 0]
+                    scalar = out[0, 0]
                 elif out.dim() == 2:
                     if target_class is None:
                         raise ValueError("Multi-class output detected; provide target_class.")
-                    scalar = out[i, target_class]
+                    scalar = out[0, target_class]
                 else:
                     raise ValueError(f"Unexpected model output shape: {tuple(out.shape)}")
 
-                scalar.backward(retain_graph=True)
+                scalar.backward()
 
                 if self._captured_emb is None or self._captured_emb.grad is None:
                     raise RuntimeError("Failed to capture embedding output/grad via hook.")
 
-                emb_i = self._captured_emb[i]          # [num_vars, D]
-                grad_i = self._captured_emb.grad[i]    # [num_vars, D]
+                # ✅ 캡처된 것도 batch=1이므로 [0]
+                emb_i = self._captured_emb[0]       # [num_vars, D]
+                grad_i = self._captured_emb.grad[0] # [num_vars, D]
 
-                X_ad = emb_i[self.ad_indices]          # [N, D]
-                G_ad = grad_i[self.ad_indices]         # [N, D]
-                X_dis = emb_i[self.dis_indices]        # [N, D]
-                G_dis = grad_i[self.dis_indices]       # [N, D]
+                X_ad = emb_i[self.ad_indices]       # [N, D]
+                G_ad = grad_i[self.ad_indices]      # [N, D]
+                X_dis = emb_i[self.dis_indices]     # [N, D]
+                G_dis = grad_i[self.dis_indices]    # [N, D]
 
-                # NEW: per-edge python loop 제거 (path별 텐서 인덱싱)
                 for v in range(N):
                     edge_pairs = self.path_cache.get(v)
 
@@ -413,8 +418,16 @@ from tqdm import tqdm
 
 @dataclass
 class GlobalImportanceOutput:
-    global_importance: torch.Tensor
-    all_scores: Optional[torch.Tensor]
+    # aggregated (global) importance: [N]
+    global_importance_var: torch.Tensor
+    global_importance_ad: torch.Tensor
+    global_importance_dis: torch.Tensor
+
+    # optionally keep all per-sample scores: [n_samples, N]
+    all_scores_var: Optional[torch.Tensor]
+    all_scores_ad: Optional[torch.Tensor]
+    all_scores_dis: Optional[torch.Tensor]
+
     n_samples: int
 
 
@@ -452,33 +465,32 @@ def compute_global_importance_on_loader(
     keep_all: bool = False,
     max_batches: Optional[int] = None,
     verbose: bool = True,
-
-    # ---- sampling options ----
-    sample_ratio: float = 1.0,   # e.g. 0.05 ~ 0.10
+    sample_ratio: float = 1.0,
     seed: int = 0,
 ) -> GlobalImportanceOutput:
-    """
-    Compute dataset-level global importance with optional batch-level sampling.
-    tqdm progress reflects *actual* processed batches.
-    """
 
     model.eval()
 
     if not (0.0 < sample_ratio <= 1.0):
         raise ValueError("sample_ratio must be in (0, 1].")
 
-    scores_cpu: List[torch.Tensor] = []
-    running_sum: Optional[torch.Tensor] = None
+    # --- storage ---
+    scores_var_cpu: List[torch.Tensor] = []
+    scores_ad_cpu: List[torch.Tensor] = []
+    scores_dis_cpu: List[torch.Tensor] = []
+
+    running_sum_var: Optional[torch.Tensor] = None
+    running_sum_ad: Optional[torch.Tensor] = None
+    running_sum_dis: Optional[torch.Tensor] = None
+
     n_seen = 0
 
-    # ---- determine total batches ----
     if not hasattr(dataloader, "__len__"):
         raise ValueError("Sampling requires dataloader with __len__().")
 
     total_batches = len(dataloader)
     effective_batches = min(total_batches, max_batches) if max_batches is not None else total_batches
 
-    # ---- sample batch indices ----
     if sample_ratio < 1.0:
         g = torch.Generator().manual_seed(seed)
         n_pick = max(1, int(round(effective_batches * sample_ratio)))
@@ -489,12 +501,8 @@ def compute_global_importance_on_loader(
     else:
         selected = list(range(effective_batches))
 
-    # ---- iterate ONLY selected batches ----
     iterator = _iter_selected_batches(dataloader, selected)
-
     pbar = tqdm(iterator, total=len(selected), desc="GB-IG (dataset)")
-
-    processed_batches = 0
 
     for b_idx, batch in pbar:
         x, y, los = batch
@@ -507,50 +515,81 @@ def compute_global_importance_on_loader(
             edge_index=edge_index,
             target_class=target_class,
         )
-        scores_b = res.gbig_var  # [B, N]
 
-        B = scores_b.size(0)
+        # [B, N] each
+        scores_var_b = res.gbig_var
+        scores_ad_b = res.gbig_ad
+        scores_dis_b = res.gbig_dis
+
+        B = scores_var_b.size(0)
         n_seen += B
-        processed_batches += 1
 
         if reduce == "mean" and not keep_all:
-            if running_sum is None:
-                running_sum = scores_b.detach().sum(dim=0)
+            # accumulate sums on GPU (cheap), finalize once
+            if running_sum_var is None:
+                running_sum_var = scores_var_b.detach().sum(dim=0)
+                running_sum_ad  = scores_ad_b.detach().sum(dim=0)
+                running_sum_dis = scores_dis_b.detach().sum(dim=0)
             else:
-                running_sum += scores_b.detach().sum(dim=0)
+                running_sum_var += scores_var_b.detach().sum(dim=0)
+                running_sum_ad  += scores_ad_b.detach().sum(dim=0)
+                running_sum_dis += scores_dis_b.detach().sum(dim=0)
         else:
-            scores_cpu.append(scores_b.detach().cpu())
-
-        '''if verbose and processed_batches % 10 == 0:
-            print(f"[GB-IG] processed_batches={processed_batches} | samples so far: {n_seen}")'''
+            # keep per-sample scores on CPU
+            scores_var_cpu.append(scores_var_b.detach().cpu())
+            scores_ad_cpu.append(scores_ad_b.detach().cpu())
+            scores_dis_cpu.append(scores_dis_b.detach().cpu())
 
         model.zero_grad(set_to_none=True)
 
     # ---- aggregate ----
+    if n_seen == 0:
+        raise RuntimeError("No samples processed.")
+
+    # fast path: mean without keep_all
     if reduce == "mean" and not keep_all:
-        if running_sum is None or n_seen == 0:
-            raise RuntimeError("No samples processed.")
-        global_importance = (running_sum / float(n_seen)).cpu()
+        if running_sum_var is None:
+            raise RuntimeError("No samples processed (running_sum is None).")
+
+        global_var = (running_sum_var / float(n_seen)).cpu()
+        global_ad  = (running_sum_ad  / float(n_seen)).cpu()
+        global_dis = (running_sum_dis / float(n_seen)).cpu()
+
         return GlobalImportanceOutput(
-            global_importance=global_importance,
-            all_scores=None,
+            global_importance_var=global_var,
+            global_importance_ad=global_ad,
+            global_importance_dis=global_dis,
+            all_scores_var=None,
+            all_scores_ad=None,
+            all_scores_dis=None,
             n_samples=n_seen,
         )
 
-    if len(scores_cpu) == 0:
+    # otherwise, concatenate and reduce
+    if len(scores_var_cpu) == 0:
         raise RuntimeError("No scores collected.")
 
-    all_scores = torch.cat(scores_cpu, dim=0)
+    all_var = torch.cat(scores_var_cpu, dim=0)  # [n_samples, N]
+    all_ad  = torch.cat(scores_ad_cpu,  dim=0)
+    all_dis = torch.cat(scores_dis_cpu, dim=0)
 
     if reduce == "mean":
-        global_importance = all_scores.mean(dim=0)
+        global_var = all_var.mean(dim=0)
+        global_ad  = all_ad.mean(dim=0)
+        global_dis = all_dis.mean(dim=0)
     elif reduce == "median":
-        global_importance = all_scores.median(dim=0).values
+        global_var = all_var.median(dim=0).values
+        global_ad  = all_ad.median(dim=0).values
+        global_dis = all_dis.median(dim=0).values
     else:
         raise ValueError(reduce)
 
     return GlobalImportanceOutput(
-        global_importance=global_importance,
-        all_scores=all_scores if keep_all else None,
-        n_samples=all_scores.size(0),
+        global_importance_var=global_var,
+        global_importance_ad=global_ad,
+        global_importance_dis=global_dis,
+        all_scores_var=all_var if keep_all else None,
+        all_scores_ad=all_ad if keep_all else None,
+        all_scores_dis=all_dis if keep_all else None,
+        n_samples=all_var.size(0),
     )
