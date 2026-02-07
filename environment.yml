@@ -8,7 +8,7 @@ dependencies:
   - appnope=0.1.4=pyhd8ed1ab_1
   - asttokens=3.0.1=pyhd8ed1ab_0
   - bzip2=1.0.8=h80987f9_6
-  - ca-certificates=2025.11.12=hbd8a1cb_0
+  - ca-certificates=2025.12.2=hca03da5_0
   - captum=0.7.0=0
   - colorama=0.4.6=pyhd8ed1ab_1
   - comm=0.2.3=pyhe01879c_0
