@@ -4,15 +4,6 @@ mean_global_importance_dis_{seed}.csv
 -> Graph based integrated gradients / num_paths
 -> avoid value explosion based on num_paths
 
-좋아. 지금 업로드한 **세 개의 파일**을 기준으로,
-네가 만든 **GB-IG (Graph-Based Integrated Gradients) for CTMP-GIN** 파이프라인을 사용하는 방법을 정리한 **README 초안**을 만들어 줄게.
-
-아래 내용은 실제 코드 흐름을 그대로 반영해서 작성했고,
-특히 `gb_ig.py`와 `explainer_main.py`의 동작을 정확히 설명하도록 구성했어.
-(코드 인용: , )
-
----
-
 # 📘 GB-IG Explainer for CTMP-GIN
 
 This repository provides a **Graph-Based Integrated Gradients (GB-IG)** implementation for interpreting **CTMP-GIN** models.
@@ -277,13 +268,3 @@ report(...)
 * Using `sum` instead of `mean` will make **path count influence importance**.
 * Tensorization removes Python edge loops (major speedup).
 * Baseline is chosen **per target variable**, not global.
-
----
-
-If 원하면 다음 단계로:
-
-* 논문 식과 네 코드 1:1 매핑
-* Appendix 스타일 pseudo-code
-* Reviewer 대응용 justification 문장
-
-도 같이 만들어 줄게.
