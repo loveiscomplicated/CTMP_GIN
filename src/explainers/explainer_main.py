@@ -38,9 +38,10 @@ if not os.path.exists(save_path):
     os.makedirs(save_path, exist_ok=True)
 
 # --------@@@@ adjust model path !!! @@@@--------
-model_path = os.path.join(cur_dir, '..', '..', 'runs', 'temp_ctmp_gin_ckpt', '1218_ctmp_epoch_37_loss_0.2717.pth')
+model_path = os.path.join(cur_dir, '..', '..', 'runs', 'temp_ctmp_gin_ckpt', 'ctmp_epoch_36_loss_0.2738.pth')
 
 # TODO add mode arg to select the explaination method, default: None -> do all method, make save path align according to this mode, add detailed configurations in this path 
+# TODO add more configs based on the modules. ex) use_mean_in_explain, use_abs
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=str, required=True) # config file location
@@ -82,6 +83,10 @@ def main():
     args = parse_args()
     cfg = load_yaml(args.config)
     cfg = override_cfg(cfg, args)
+
+    use_mean_in_explain = True
+    use_abs = True
+    reduce = "mean"
 
     # run_id = make_run_id(cfg)
     # run_dir = ensure_run_dir("runs", run_id)
@@ -137,14 +142,17 @@ def main():
     print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
 
     # build edge_index
-    edge_index = build_edge(model_name=cfg["model"]["name"],
+    '''edge_index = build_edge(model_name=cfg["model"]["name"],
                             root=root,
                             seed=seed,
                             train_df=train_df,
                             num_nodes=num_nodes,
                             batch_size = cfg["train"]["batch_size"],
                             **cfg.get("edge", {})
-                            )
+                            )'''
+    import pickle
+    with open(os.path.join(cur_dir, 'edge_index.pickle'), 'rb') as f:
+        edge_index = pickle.load(f)
     edge_index = edge_index.to(device) # type: ignore
 
     print(f'edge index: \n{edge_index}')
@@ -173,7 +181,7 @@ def main():
         dis_indices=dataset.col_info[3], # type: ignore
         baseline_strategy="farthest",
         max_paths=1,            
-        use_abs=True,
+        use_abs=use_abs,
         device=device,
     )
     
@@ -192,7 +200,8 @@ def main():
             sample_ratio=rat,
             seed=s,
             keep_all=False,
-            reduce="mean",
+            reduce=reduce,
+            use_mean_in_explain=use_mean_in_explain, # 
             verbose=True,
         )
         outs_var.append(out.global_importance_var.cpu().float())  # [N]
@@ -205,7 +214,7 @@ def main():
     col_names_dis = [col_names[i] for i in dis_col_index]
 
     # ---- after outs computed ----
-    # df_ms_var = importance_mean_std_table(outs_var, col_names_ad)
+    df_ms_var = importance_mean_std_table(outs_var, col_names_ad)
     df_ms_ad = importance_mean_std_table(outs_ad, col_names_ad)
     df_ms_dis = importance_mean_std_table(outs_dis, col_names_dis)
 

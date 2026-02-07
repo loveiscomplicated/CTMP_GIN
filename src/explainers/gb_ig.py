@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Literal
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-
+import math
 
 BaselineStrategy = Literal["farthest", "fixed"]
 
@@ -88,25 +88,92 @@ def enumerate_shortest_paths(
     return paths
 
 
+
 def choose_baseline_node(
     adj: List[List[int]],
     target: int,
     strategy: BaselineStrategy,
     fixed_idx: int = 0,
+    max_paths: int = 256,   # cap to control blow-up
 ) -> int:
-    """Select baseline node index."""
+    """
+    Select baseline node index.
+
+    - strategy == "fixed": return fixed_idx
+    - strategy == "farthest": choose b in D(x) (max-distance nodes) using the
+      information-theoretic criterion from Sec. 4.1:
+
+        b~ = argmax_{b in D(x)} E(Γ(b,x)),
+        E(Γ) = sum_{γ in Γ} p(γ) I(γ),
+        p(γ) = ∏_{v in γ} (1/deg(v)),
+        I(γ) = -log2 p(γ) = ∑_{v in γ} log2(deg(v)).
+
+      We compute E(Γ(b,target)) using ONLY one BFS from `target`:
+        - dist_tx, parents_tx = bfs_dist_and_parents(adj, target)
+        - enumerate shortest paths target -> b using parents_tx
+        - reverse each path to represent b -> target (direction doesn't matter for p(γ), I(γ))
+    """
     n = len(adj)
+
     if strategy == "fixed":
         if not (0 <= fixed_idx < n):
             raise ValueError(f"fixed_idx {fixed_idx} out of range [0,{n-1}]")
         return fixed_idx
 
-    dist, _ = bfs_dist_and_parents(adj, target)
-    max_d = max(dist)
+    # degrees (deg(v) = number of neighbors)
+    deg = [len(adj[v]) for v in range(n)]
+
+    # 1) single BFS from target
+    dist_tx, parents_tx = bfs_dist_and_parents(adj, target)  # dist from target -> v
+
+    # candidates D(x): nodes at maximal distance from target
+    max_d = max(dist_tx)
     if max_d <= 0:
         return 0
-    candidates = [i for i, d in enumerate(dist) if d == max_d]
-    return min(candidates)
+
+    candidates = [i for i, d in enumerate(dist_tx) if d == max_d]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # helper: compute E(Γ(b,target)) for a candidate b
+    def entropy_of_paths(b: int) -> float:
+        # enumerate shortest paths target -> b using parents_tx (capped)
+        paths_t2b = enumerate_shortest_paths(
+            parents_tx, start=target, target=b, max_paths=max_paths
+        )
+        if not paths_t2b:
+            return float("-inf")
+
+        E = 0.0
+        for path in paths_t2b:
+            # path: [target, ..., b]
+            # direction doesn't matter for p(γ), I(γ) because it's product/sum over nodes
+            p = 1.0
+            I = 0.0
+            for v in path:
+                dv = deg[v]
+                if dv <= 0:
+                    return float("-inf")
+                p *= (1.0 / dv)
+                I += math.log2(dv)
+            E += p * I
+        return E
+
+    # 2) pick b maximizing E(Γ(b,target))
+    best_b = min(candidates)
+    best_E = float("-inf")
+
+    for b in candidates:
+        Eb = entropy_of_paths(b)
+        if (Eb > best_E) or (Eb == best_E and b < best_b):
+            best_E = Eb
+            best_b = b
+
+    # fallback (rare)
+    if best_E == float("-inf"):
+        return min(candidates)
+
+    return best_b
 
 
 # -----------------------------
@@ -165,8 +232,9 @@ class ShortestPathEdgeCache:
         Build cache for all targets 0..N-1.
         This is CPU-only and done once.
         """
+        print("Building cache for shortest path...")
         for v in range(self.N):
-            b = choose_baseline_node(self.adj, v, self.baseline_strategy, self.baseline_fixed_idx)
+            b = choose_baseline_node(self.adj, v, self.baseline_strategy, self.baseline_fixed_idx,max_paths=self.max_paths) # type: ignore
             self.baseline_of_target[v] = b
 
             dist, parents = bfs_dist_and_parents(self.adj, b)
@@ -333,6 +401,7 @@ class CTMPGIN_GBIGExplainer:
         los: torch.Tensor,
         edge_index: torch.Tensor,
         target_class: Optional[int] = None,
+        use_mean: bool = False,
     ) -> GBIGResult:
         device = self._infer_device(x)
         self.model.eval()
@@ -385,12 +454,12 @@ class CTMPGIN_GBIGExplainer:
                     s_ad = gbig_score_for_node_tensorized(
                         X=X_ad, G=G_ad,
                         edge_pairs_list=edge_pairs,
-                        use_mean=True,
+                        use_mean=use_mean,
                     )
                     s_dis = gbig_score_for_node_tensorized(
                         X=X_dis, G=G_dis,
                         edge_pairs_list=edge_pairs,
-                        use_mean=True,
+                        use_mean=use_mean,
                     )
 
                     gbig_ad_all[i, v] = s_ad
@@ -398,6 +467,8 @@ class CTMPGIN_GBIGExplainer:
 
             if self.use_abs:
                 gbig_var = 0.5 * (gbig_ad_all.abs() + gbig_dis_all.abs())
+                gbig_ad_all = gbig_ad_all.abs()
+                gbig_dis_all = gbig_dis_all.abs()
             else:
                 gbig_var = 0.5 * (gbig_ad_all + gbig_dis_all)
 
@@ -462,6 +533,7 @@ def compute_global_importance_on_loader(
     *,
     target_class: Optional[int] = None,
     reduce: Literal["mean", "median"] = "mean",
+    use_mean_in_explain: bool = False,
     keep_all: bool = False,
     max_batches: Optional[int] = None,
     verbose: bool = True,
@@ -514,6 +586,7 @@ def compute_global_importance_on_loader(
             los=los,
             edge_index=edge_index,
             target_class=target_class,
+            use_mean=use_mean_in_explain
         )
 
         # [B, N] each
@@ -593,3 +666,16 @@ def compute_global_importance_on_loader(
         all_scores_dis=all_dis if keep_all else None,
         n_samples=all_var.size(0),
     )
+
+
+def split_by_suffix(names, values, suffix="_D"):
+    idx_base = [i for i,n in enumerate(names) if not n.endswith(suffix)]
+    idx_d    = [i for i,n in enumerate(names) if n.endswith(suffix)]
+
+    base = values[idx_base]
+    d    = values[idx_d]
+
+    names_base = [names[i] for i in idx_base]
+    names_d    = [names[i] for i in idx_d]
+
+    return (idx_base, names_base, base), (idx_d, names_d, d)
