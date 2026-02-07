@@ -11,25 +11,16 @@ import argparse
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
-from src.data_processing.tensor_dataset import TEDSTensorDataset, TEDSDatasetForGIN
+from src.data_processing.tensor_dataset import TEDSTensorDataset
 from src.data_processing.data_utils import train_test_split_stratified
 from src.models.factory import build_model, build_edge
 from src.trainers.base import load_checkpoint
-from src.utils.experiment import make_run_id, ensure_run_dir, ExperimentLogger
 from src.utils.seed_set import set_seed
 from src.utils.device_set import device_set
 from src.trainers.utils.early_stopper import EarlyStopper
 
-from src.explainers.gb_ig import CTMPGIN_GBIGExplainer, compute_global_importance_on_loader, GlobalImportanceOutput
-from src.explainers.stablity_report import (
-    stability_report, 
-    print_stability_report, 
-    topk_indices, 
-    unstable_variables_report, 
-    print_unstable_report_with_names,
-    importance_mean_std_table
-)
+from src.explainers.gb_ig_main import gb_ig_main
+from src.explainers.integrated_gradients import manual_ig_embeddings
 
 cur_dir = os.path.dirname(__file__)
 root = os.path.join(cur_dir, '..', 'data')
@@ -38,13 +29,13 @@ if not os.path.exists(save_path):
     os.makedirs(save_path, exist_ok=True)
 
 # --------@@@@ adjust model path !!! @@@@--------
-model_path = os.path.join(cur_dir, '..', '..', 'runs', 'temp_ctmp_gin_ckpt', 'ctmp_epoch_36_loss_0.2738.pth')
 
 # TODO add mode arg to select the explaination method, default: None -> do all method, make save path align according to this mode, add detailed configurations in this path 
 # TODO add more configs based on the modules. ex) use_mean_in_explain, use_abs
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=str, required=True) # config file location
+    p.add_argument("--explain_method", type=str, required=True)
     p.add_argument("--is_mi_based_edge", type=int, default=None)
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--batch_size", type=int, default=None)
@@ -60,6 +51,8 @@ def load_yaml(path: str) -> dict:
         return yaml.safe_load(f)
     
 def override_cfg(cfg: dict, args) -> dict:
+    if args.explain_method is not None:
+        cfg["explain_method"] = args.explain_method
     if args.device is not None:
         cfg["device"] = args.device
     if args.is_mi_based_edge is not None:
@@ -87,6 +80,7 @@ def main():
     use_mean_in_explain = True
     use_abs = True
     reduce = "mean"
+    explain_method = cfg["explain_method"]
 
     # run_id = make_run_id(cfg)
     # run_dir = ensure_run_dir("runs", run_id)
@@ -106,8 +100,7 @@ def main():
 
     cfg["model"]["params"]["col_info"] = dataset.col_info
     cfg["model"]["params"]["num_classes"] = dataset.num_classes
-    
-    num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+    cfg["model"]["params"]["device"] = device
 
     # create dataloaders
     split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
@@ -117,19 +110,8 @@ def main():
                                                                                    seed=seed,
                                                                                    num_workers=cfg['train']['num_workers'],
                                                                                    )
-    
     train_df = dataset.processed_df.iloc[idx[0]]
-
-    '''    
-    if cfg["model"]["name"] == "xgboost":
-        from src.models.xgboost import train_xgboost
-        train_idx, val_idx, test_idx = idx
-        return train_xgboost(train_idx, val_idx, test_idx, dataset.processed_df, logger, cfg)
-    
-    if cfg["model"]["name"] == "a3tgcn":
-        cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
-        cfg["model"]["params"]["device"] = device
-    '''
+    num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
 
     # build model
     model = build_model(
@@ -141,110 +123,83 @@ def main():
     print(model)
     print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
 
-    # build edge_index
-    '''edge_index = build_edge(model_name=cfg["model"]["name"],
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["learning_rate"])
+    scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
+
+    if explain_method == "gb_ig":
+        model_path = os.path.join(cur_dir, '..', '..', 'runs', 'temp_ctmp_gin_ckpt', 'ctmp_epoch_36_loss_0.2738.pth')
+
+        import pickle
+        with open(os.path.join(cur_dir, 'edge_index.pickle'), 'rb') as f:
+            edge_index = pickle.load(f)
+        edge_index = edge_index.to(device) # type: ignore
+
+        load_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            filename=model_path
+        )    
+
+        print("\n--------------------Interpreting Models with Graph Based Integrated Gradients--------------------")
+        # Call gb_ig_main to perform explanations
+        gb_ig_main(model=model,
+                edge_index=edge_index,
+                dataset=dataset,
+                test_loader=test_loader,
+                use_abs=use_abs,
+                device=device,
+                reduce=reduce,
+                use_mean_in_explain=use_mean_in_explain,
+                seed=seed,
+                save_path=save_path,
+                sample_ratio=0.1) 
+        print("--------------------Interpreting Models with Graph Based Integrated Gradients FINISHED--------------------")
+
+    if explain_method == "ig":
+        model_path = os.path.join(cur_dir, '..', '..', 'runs', 'IG_20260129-050325__ctmp_gin__bs=32__lr=1.00e-03__seed=42', 'checkpoints', 'best.pt')
+
+        load_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            filename=model_path,
+            map_location=device,
+        )
+        edge_index = build_edge(model_name=cfg["model"]["name"],
                             root=root,
                             seed=seed,
                             train_df=train_df,
                             num_nodes=num_nodes,
                             batch_size = cfg["train"]["batch_size"],
                             **cfg.get("edge", {})
-                            )'''
-    import pickle
-    with open(os.path.join(cur_dir, 'edge_index.pickle'), 'rb') as f:
-        edge_index = pickle.load(f)
-    edge_index = edge_index.to(device) # type: ignore
+                            )
+        edge_index = edge_index.to(device) # type: ignore
 
-    print(f'edge index: \n{edge_index}')
-    print(f'edge index shape: \n{edge_index.shape}')
+        counter = 0
+        for batch in test_loader:
+            if counter > 1: break
+            x, y, los = batch
+            x = x.to(device)
+            y = y.to(device)
+            los = los.to(device)
 
-    if cfg["train"]["binary"]:
-        criterion = nn.BCEWithLogitsLoss()
-    else:
-        criterion = nn.CrossEntropyLoss()
+            res = manual_ig_embeddings(model=model, x_idx=x, los_idx=los, edge_index=edge_index, target="logit", n_steps=50)
+            
+            import pickle
+            with open("layer_IG_res.pickle", 'wb') as f:
+                pickle.dump(res, f)
+
+            ig_x, ig_los, delta = res
+            print(ig_x)
+            print(ig_los)
+            print(delta)
+
+            counter += 1
+
+        print("\n--------------------Interpreting Models with Integrated Gradients--------------------")
         
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["learning_rate"])
-    scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
-    early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
-
-    load_checkpoint(
-        model=model,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        filename=model_path
-    )    
-    
-    explainer = CTMPGIN_GBIGExplainer(
-        model=model,
-        edge_index_vargraph=edge_index.detach().cpu(),
-        ad_indices=dataset.col_info[2],  # type: ignore
-        dis_indices=dataset.col_info[3], # type: ignore
-        baseline_strategy="farthest",
-        max_paths=1,            
-        use_abs=use_abs,
-        device=device,
-    )
-    
-    rat = 0.05
-    outs_var = []
-    outs_ad = []
-    outs_dis = []
-    for s in [0, 1, 2]:
-        set_seed(s)
-        out = compute_global_importance_on_loader(
-            explainer=explainer,
-            model=model,
-            dataloader=test_loader,
-            edge_index=edge_index,
-            device=device,
-            sample_ratio=rat,
-            seed=s,
-            keep_all=False,
-            reduce=reduce,
-            use_mean_in_explain=use_mean_in_explain, # 
-            verbose=True,
-        )
-        outs_var.append(out.global_importance_var.cpu().float())  # [N]
-        outs_ad.append(out.global_importance_ad.cpu().float())
-        outs_dis.append(out.global_importance_dis.cpu().float())
-        
-    col_names, col_dims, ad_col_index, dis_col_index = dataset.col_info
-
-    col_names_ad = [col_names[i] for i in ad_col_index]
-    col_names_dis = [col_names[i] for i in dis_col_index]
-
-    # ---- after outs computed ----
-    df_ms_var = importance_mean_std_table(outs_var, col_names_ad)
-    df_ms_ad = importance_mean_std_table(outs_ad, col_names_ad)
-    df_ms_dis = importance_mean_std_table(outs_dis, col_names_dis)
-
-    def report(df_ms, outs, col_names, filename):
-        # 보기 편하게 top/bottom
-        print("\n=== Top 20 (mean ± std) ===")
-        print(df_ms.head(20).to_string(index=False))
-
-        print("\n=== Bottom 20 (mean ± std) ===")
-        print(df_ms.tail(20).to_string(index=False))
-
-        # CSV 저장
-        out_csv = os.path.join(save_path, filename)
-        df_ms.to_csv(out_csv, index=False)
-        print(f"\nSaved: {out_csv}")
-
-        # get reports
-        report = stability_report(outs, ks=[10, 20, 30])
-        print_stability_report(report, ks=[10, 20, 30])
-
-        rep20 = unstable_variables_report(outs, k=20)
-        print_unstable_report_with_names(rep20, col_names)
-
-        rep30 = unstable_variables_report(outs, k=30)
-        print_unstable_report_with_names(rep30, col_names)
-
-    report(df_ms_ad, outs_ad, col_names_ad, f"global_importance_ad_{seed}.csv")
-    report(df_ms_dis, outs_dis, col_names_dis, f"global_importance_dis_{seed}.csv")
-        
-    # TODO include los into variable importances
+        print("--------------------Interpreting Models with Integrated Gradients FINISHED--------------------")
 
 if __name__ == "__main__":
     main()
