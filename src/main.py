@@ -88,6 +88,7 @@ def main():
 
     cfg["model"]["params"]["col_info"] = dataset.col_info
     cfg["model"]["params"]["num_classes"] = dataset.num_classes
+    cfg["model"]["params"]["device"] = device
     
     num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
 
@@ -109,7 +110,6 @@ def main():
     
     if cfg["model"]["name"] == "a3tgcn":
         cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
-        cfg["model"]["params"]["device"] = device
 
     # build model
     model = build_model(

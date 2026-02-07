@@ -247,8 +247,8 @@ def load_checkpoint(model, optimizer, scheduler, filename, map_location=None):
     scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
     start_epoch = checkpoint['epoch'] + 1
-    best_loss = checkpoint['best_loss']
-
+    
+    best_loss = checkpoint.get('best_loss', None)
     return start_epoch, best_loss
 
 def run_train_loop(
