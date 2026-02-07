@@ -1,1 +1,1 @@
-from .model import GIN,  GIN_m
+from .model import GIN

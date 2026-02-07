@@ -45,7 +45,8 @@ class A3TGCN_manual(nn.Module):
                  hidden_channel, 
                  num_classes,
                  device,
-                 cached=True):
+                 cached=True,
+                 **kwargs):
         '''
         Args:
             col_info(list): [col_dims, col_list]

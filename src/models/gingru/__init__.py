@@ -1,2 +1,2 @@
-from .model import GinGru, GinGru_m
+from .model import GinGru
 from .gin_gru_2point import GinGru_2_Point
