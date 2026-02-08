@@ -1,28 +1,36 @@
 import torch
-import torch.nn.functional as F
+from typing import Dict, Optional
 
 @torch.no_grad()
 def _make_baseline_x_like(x_idx: torch.Tensor) -> torch.Tensor:
+    # baseline category = 0
     return torch.zeros_like(x_idx, dtype=torch.long)
 
 @torch.no_grad()
 def _make_baseline_los_like(los_idx: torch.Tensor) -> torch.Tensor:
+    # baseline LOS token = 0 (NONE)
     return torch.zeros_like(los_idx, dtype=torch.long)
+
 
 def manual_ig_embeddings(
     model,
     x_idx: torch.Tensor,          # [B, 72] long
     los_idx: torch.Tensor,        # [B] long
-    edge_index: torch.Tensor,     # [2, E]
+    edge_index: torch.Tensor,     # [2, E_internal]
     target: str = "logit",        # "logit" only for now
     n_steps: int = 50,
-):
+    return_full: bool = False,    # True면 ig_x([B,72,D])/ig_los([B,Dlos])도 같이 반환
+) -> Dict[str, torch.Tensor]:
     """
-    Returns:
-      ig_x_emb:  [B, 72, emb_dim]  (variable attribution in embedding space)
-      ig_los_emb:[B, los_emb_dim]  (LOS attribution in embedding space)
-      delta:     [B] (approx convergence check: f(x)-f(baseline) - sum(IG))
+    Requires model has:
+      - entity_embedding_layer(x_idx) -> [B,72,emb_dim]
+      - get_edge_index_2(edge_index, num_nodes, batch_size) -> [2, E_total]
+      - get_edge_attr(los, edge_index, batch_size, num_nodes) -> [E_total, D_los]
+      - forward_from_x_emb(x_embedded, los, edge_index) -> [B,1] or [B]
+      - forward_from_x_emb_with_edge_attr(x_embedded, edge_index, edge_index_2, edge_attr) -> [B,1] or [B]
     """
+    assert target == "logit", "manual_ig_embeddings: target='logit' only."
+
     model.eval()
     device = next(model.parameters()).device
 
@@ -30,150 +38,341 @@ def manual_ig_embeddings(
     los_idx = los_idx.to(device).long()
     edge_index = edge_index.to(device)
 
-    # baselines (indices)
+    B = x_idx.size(0)
+    num_nodes = len(model.ad_col_index)  # CTMPGIN 기준
+
+    # -------------------------
+    # Baselines (indices)
+    # -------------------------
     base_x_idx = _make_baseline_x_like(x_idx).to(device)
     base_los_idx = _make_baseline_los_like(los_idx).to(device)
 
-    # embeddings (continuous)
-    # entity_embedding_layer(x_idx) -> [B, 72, emb_dim]
-    x_emb = model.entity_embedding_layer(x_idx)
+    # -------------------------
+    # Continuous embeddings (x)
+    # -------------------------
+    x_emb = model.entity_embedding_layer(x_idx)         # [B,72,Dx]
     base_x_emb = model.entity_embedding_layer(base_x_idx)
 
-    los_emb = model.embed_los(los_idx)          # [B, los_emb_dim] or [B,1,los_emb_dim] depending on impl
-    base_los_emb = model.embed_los(base_los_idx)
-
-    # Normalize LOS embed shape to [B, D]
-    if los_emb.dim() == 3:
-        los_emb = los_emb.squeeze(1)
-        base_los_emb = base_los_emb.squeeze(1)
-
-    # We will IG over x_emb and los_emb separately, holding the other at actual value.
-    # (필요하면 둘을 동시에 경로로 묶는 것도 가능하지만, "무조건"은 분리 경로가 안전)
-
-    # ----- helper: forward with given x_emb + los_idx (indices) -----
-    def f_from_xemb(xemb, los_indices):
-        # model uses los_indices (long) internally to build edge_attr, so keep it as indices.
+    def f_from_xemb(xemb: torch.Tensor, los_indices: torch.Tensor) -> torch.Tensor:
         out = model.forward_from_x_emb(xemb, los_indices, edge_index)
-        out = out.squeeze(-1)  # [B]
-        return out
+        return out.squeeze(-1)  # [B]
 
-    # ----- helper: forward with given los_emb (continuous) -----
-    # los는 edge_attr로 들어가는데, 지금 모델은 los_idx로 embed_los를 내부에서 만들고 있음.
-    # 그래서 los_emb로 직접 주입하려면 "get_edge_attr"를 los_emb로 받는 버전이 필요.
-    # -> 무조건 돌아가게 하려면 LOS는 "embed_los.embedding_layer"에 대한 IG를 따로 말고,
-    #    일단은 LOS attribution을 'edge_attr gradient'로 계산하는 방식으로 간다.
-    #
-    # 즉, LOS는 IG가 아니라: edge_attr에 대한 gradient × (edge_attr - baseline_edge_attr)로 처리.
-    # (네 구조에서 이게 가장 단단함)
-
-    # =========================
-    # 1) Variable IG (x_emb)
-    # =========================
-    # allocate
-    ig_x = torch.zeros_like(x_emb, device=device)
-    total_grads = torch.zeros_like(x_emb, device=device)
-
-    # difference
+    # ==========================================================
+    # 1) IG for variables in embedding space: IG over x_emb
+    # ==========================================================
     dx = (x_emb - base_x_emb)
+    total_grads_x = torch.zeros_like(x_emb)
 
-    # IG loop
     for s in range(1, n_steps + 1):
         alpha = float(s) / n_steps
-        x_s = (base_x_emb + alpha * dx).detach()
-        x_s.requires_grad_(True)
+        x_s = (base_x_emb + alpha * dx).detach().requires_grad_(True)
 
-        out = f_from_xemb(x_s, los_idx)          # [B]
-        # sum to scalar
-        out_sum = out.sum()
+        out = f_from_xemb(x_s, los_idx)  # [B]
+        grads = torch.autograd.grad(out.sum(), x_s, retain_graph=False, create_graph=False)[0]
+        total_grads_x += grads
 
-        grads = torch.autograd.grad(out_sum, x_s, retain_graph=False, create_graph=False)[0]
-        total_grads += grads
+    avg_grads_x = total_grads_x / float(n_steps)
+    ig_x = dx * avg_grads_x  # [B,72,Dx]
 
-    avg_grads = total_grads / n_steps
-    ig_x = dx * avg_grads  # [B, 72, emb_dim]
+    # ==========================================================
+    # 2) IG for LOS via edge_attr path: IG over edge_attr
+    #    (edge_attr는 [E_total, D_los] 이고, cross-edge만 sample별로 모음)
+    # ==========================================================
+    # Build fixed edge_index_2 once
+    edge_index_2 = model.get_edge_index_2(
+        edge_index=edge_index, num_nodes=num_nodes, batch_size=B
+    ).to(device)
 
-    # =========================
-    # 2) LOS attribution (robust): edge_attr gradient attribution
-    # =========================
-    # We compute grad w.r.t. edge_attr produced by los_idx inside get_edge_attr.
-    # To do so, we re-run forward once, but we need access to edge_attr tensor with requires_grad=True.
-    #
-    # 가장 간단한 방법: get_new_edge를 살짝 바꿔서 edge_attr를 반환할 때 requires_grad_를 걸어줌.
-    # 여기서는 "모델 코드를 거의 안 건드리고" 하기 위해 forward 중간에서 edge_attr를 만들고 직접 gin_2까지 흉내내는 건 복잡.
-    #
-    # 그래서 "무조건" 기준으로는 CTMPGIN에 아래 메서드 1개만 더 추가하는 걸 권장:
-    #   forward_with_edge_attr(x_embedded, edge_index, edge_index_2, edge_attr) -> logit
-    #
-    # 하지만 일단 지금 당장 돌아가게 하는 최소 수정은:
-    #   get_new_edge에서 edge_attr에 requires_grad_를 걸고, forward가 그걸 그대로 쓰게 한 뒤
-    #   forward 직후 edge_attr.grad로 attribution 계산
+    # Actual / baseline edge_attr
+    edge_attr_1 = model.get_edge_attr(
+        los=los_idx, edge_index=edge_index, batch_size=B, num_nodes=num_nodes
+    ).to(device)
 
-    # ---- compute LOS grad attribution by temporary patch via hook ----
-    saved = {}
+    edge_attr_0 = model.get_edge_attr(
+        los=torch.zeros_like(los_idx), edge_index=edge_index, batch_size=B, num_nodes=num_nodes
+    ).to(device)
 
-    def _edge_attr_hook(module, inp, out):
-        # not used
-        return
+    d_edge = (edge_attr_1 - edge_attr_0)
+    total_grads_ea = torch.zeros_like(edge_attr_1)
 
-    # monkeypatch: wrap original get_new_edge
-    orig_get_new_edge = model.get_new_edge
-
-    def patched_get_new_edge(edge_index, los, batch_size):
-        ei2, ea = orig_get_new_edge(edge_index=edge_index, los=los, batch_size=batch_size)
-        ea = ea.detach()
-        ea.requires_grad_(True)
-        saved["edge_attr"] = ea
-        saved["edge_index_2"] = ei2
-        return ei2, ea
-
-    model.get_new_edge = patched_get_new_edge
-
-    # one forward for LOS grad
+    # x는 actual로 고정한 상태에서 LOS만 IG
     x_emb_det = x_emb.detach()
-    x_emb_det.requires_grad_(False)
 
-    out = f_from_xemb(x_emb_det, los_idx)  # [B]
-    out_sum = out.sum()
-    out_sum.backward()
+    for s in range(1, n_steps + 1):
+        alpha = float(s) / n_steps
+        ea_s = (edge_attr_0 + alpha * d_edge).detach().requires_grad_(True)
 
-    edge_attr = saved["edge_attr"]              # [E_total, D_los]
-    grad_edge_attr = edge_attr.grad             # same shape
+        out = model.forward_from_x_emb_with_edge_attr(
+            x_embedded=x_emb_det,
+            edge_index=edge_index,
+            edge_index_2=edge_index_2,
+            edge_attr=ea_s,
+        ).squeeze(-1)  # [B]
 
-    # baseline edge_attr: internal edges are NONE(0), cross edges are los baseline(0) as well
-    # so baseline edge_attr == embed_los(0) for all edges
-    with torch.no_grad():
-        base_edge_attr = model.embed_los(torch.zeros(edge_attr.size(0), device=device, dtype=torch.long))
-        if base_edge_attr.dim() == 3:
-            base_edge_attr = base_edge_attr.squeeze(1)
+        grads = torch.autograd.grad(out.sum(), ea_s, retain_graph=False, create_graph=False)[0]
+        total_grads_ea += grads
 
-    ig_edge_attr = (edge_attr - base_edge_attr) * grad_edge_attr  # [E_total, D_los]
+    avg_grads_ea = total_grads_ea / float(n_steps)
+    ig_edge_attr = d_edge * avg_grads_ea  # [E_total, D_los]
 
-    # restore
-    model.get_new_edge = orig_get_new_edge
-    model.zero_grad(set_to_none=True)
-
-    # Aggregate LOS contribution only on cross edges (the last B*num_nodes edges in your construction)
-    B = x_idx.size(0)
-    num_nodes = len(model.ad_col_index)
+    # Cross edges만 모아 per-sample LOS attribution 만들기
     E_cross = B * num_nodes
     E_total = ig_edge_attr.size(0)
-    cross = ig_edge_attr[E_total - E_cross:]  # [B*N, D]
+    cross = ig_edge_attr[E_total - E_cross:]                 # [B*N, D_los]
+    ig_los = cross.reshape(B, num_nodes, -1).sum(dim=1)      # [B, D_los]
 
-    # reduce per-sample: reshape [B, N, D] -> sum over N
-    cross = cross.reshape(B, num_nodes, -1).sum(dim=1)  # [B, D_los]
-    ig_los = cross  # [B, D_los]
+    # ==========================================================
+    # 3) Reduce to variable-level scores (abs / signed)
+    # ==========================================================
+    imp_abs_x = ig_x.abs().sum(dim=-1)       # [B,72]
+    imp_signed_x = ig_x.sum(dim=-1)          # [B,72]
 
-    # =========================
-    # 3) Convergence-ish delta
-    # =========================
+    imp_abs_los = ig_los.abs().sum(dim=-1)   # [B]
+    imp_signed_los = ig_los.sum(dim=-1)      # [B]
+
+    # ==========================================================
+    # 4) Completeness-ish delta (SIGNED로만)
+    # ==========================================================
     with torch.no_grad():
-        fx = f_from_xemb(x_emb, los_idx)  # [B]
-        f0 = f_from_xemb(base_x_emb, base_los_idx)  # [B]
+        fx = f_from_xemb(x_emb, los_idx)              # [B]
+        f0 = f_from_xemb(base_x_emb, base_los_idx)    # [B]
 
-        # total attribution scalar per sample
-        ig_x_scalar = ig_x.sum(dim=(1, 2))          # [B]
-        ig_los_scalar = ig_los.sum(dim=1)           # [B]
-        delta = (fx - f0) - (ig_x_scalar + ig_los_scalar)
+        ig_x_scalar = imp_signed_x.sum(dim=1)         # [B]
+        ig_los_scalar = imp_signed_los                # [B]
+        delta = (fx - f0) - (ig_x_scalar + ig_los_scalar)  # [B]
 
-    return ig_x, ig_los, delta
+    out = {
+        "imp_abs_x": imp_abs_x,               # [B,72]
+        "imp_signed_x": imp_signed_x,         # [B,72]
+        "imp_abs_los": imp_abs_los,           # [B]
+        "imp_signed_los": imp_signed_los,     # [B]
+        "delta": delta,                       # [B]
+    }
 
+    if return_full:
+        out["ig_x"] = ig_x                   # [B,72,Dx]
+        out["ig_los"] = ig_los               # [B,D_los]
+        out["ig_edge_attr"] = ig_edge_attr   # [E_total,D_los]
+
+    return out
+
+
+from tqdm import tqdm
+from src.explainers.utils import _iter_selected_batches
+from typing import Optional, List, Literal
+
+
+"""
+      ig_x_emb:  [B, 72, emb_dim]  (variable attribution in embedding space)
+      ig_los_emb:[B, los_emb_dim]  (LOS attribution in embedding space)
+      delta:     [B] (approx convergence check: f(x)-f(baseline) - sum(IG))
+"""
+
+
+def explain_ig_for_dataset(
+    dataloader,
+    model,
+    edge_index: torch.Tensor,     # [2, E]
+    target: str = "logit",        # "logit" only for now
+    n_steps: int = 50,
+    reduce: Literal["mean", "median"] = "mean",
+    keep_all: bool = False,
+    max_batches: Optional[int] = None,
+    verbose: bool = True,
+    sample_ratio: float = 0.1,
+    seed: int = 0,
+    ):
+
+    model.eval()
+    
+    if not (0.0 < sample_ratio <= 1.0):
+        raise ValueError("sample_ratio must be in (0, 1].")
+
+    # --- storage ---
+    scores_abs_x: List[torch.Tensor] = []
+    scores_abs_los: List[torch.Tensor] = []
+    scores_signed_x: List[torch.Tensor] = []
+    scores_signed_los: List[torch.Tensor] = []
+    scores_delta: List[torch.Tensor] = []
+
+
+    running_sum_abs_x: Optional[torch.Tensor] = None
+    running_sum_abs_los: Optional[torch.Tensor] = None
+    running_sum_signed_x: Optional[torch.Tensor] = None
+    running_sum_signed_los: Optional[torch.Tensor] = None
+    running_sum_delta: Optional[torch.Tensor] = None
+
+    n_seen = 0
+
+    if not hasattr(dataloader, "__len__"):
+        raise ValueError("Sampling requires dataloader with __len__().")
+
+    total_batches = len(dataloader)
+    effective_batches = min(total_batches, max_batches) if max_batches is not None else total_batches
+
+    if sample_ratio < 1.0:
+            g = torch.Generator().manual_seed(seed)
+            n_pick = max(1, int(round(effective_batches * sample_ratio)))
+            perm = torch.randperm(effective_batches, generator=g).tolist()
+            selected = sorted(perm[:n_pick])
+            if verbose:
+                print(f"[Integrated Gradients] Sampling batches: {n_pick}/{effective_batches} (ratio={sample_ratio}, seed={seed})")
+    else:
+        selected = list(range(effective_batches))
+
+    iterator = _iter_selected_batches(dataloader, selected)
+    pbar = tqdm(iterator, total=len(selected), desc="IG (dataset)")
+
+    for b_idx, batch in pbar:
+        x_idx, y_idx, los_idx = batch
+        
+        res = manual_ig_embeddings(
+            model=model,
+            x_idx=x_idx,
+            los_idx=los_idx,
+            edge_index=edge_index,
+            target=target,
+            n_steps=n_steps,
+        )
+
+        imp_abs_x = res["imp_abs_x"]
+        imp_abs_los = res["imp_abs_los"]
+        imp_signed_x = res["imp_signed_x"]
+        imp_signed_los = res["imp_signed_los"]
+        delta = res["delta"]
+
+        B = imp_abs_x.size(0)
+        n_seen += B
+
+        if reduce == "mean" and not keep_all:
+            if running_sum_abs_x is None:
+                running_sum_abs_x = imp_abs_x.detach().sum(dim=0)
+                running_sum_abs_los = imp_abs_los.detach().sum(dim=0)
+                running_sum_signed_x = imp_signed_x.detach().sum(dim=0)
+                running_sum_signed_los = imp_signed_los.detach().sum(dim=0)
+                running_sum_delta = delta.detach().sum(dim=0)
+            else:
+                running_sum_abs_x += imp_abs_x.detach().sum(dim=0)
+                running_sum_abs_los  += imp_abs_los.detach().sum(dim=0)
+                running_sum_signed_x += imp_signed_x.detach().sum(dim=0)
+                running_sum_signed_los += imp_signed_los.detach().sum(dim=0)
+                running_sum_delta += delta.detach().sum(dim=0)
+        else:
+            scores_abs_x.append(imp_abs_x.detach().cpu())
+            scores_abs_los.append(imp_abs_los.detach().cpu())
+            scores_signed_x.append(imp_signed_x.detach().cpu())
+            scores_signed_los.append(imp_signed_los.detach().cpu())
+            scores_delta.append(delta.detach().cpu())
+    
+    # ---- aggregate ----
+    if n_seen == 0:
+        raise RuntimeError("No samples processed.")
+
+    # fast path: mean without keep_all
+    if reduce == "mean" and not keep_all:
+        if running_sum_abs_x is None:
+            raise RuntimeError("No samples processed (running_sum_abs is None).")
+        if running_sum_signed_x is None:
+            raise RuntimeError("No samples processed (running_sum_signed is None).")
+        
+        global_abs_x = (running_sum_abs_x / float(n_seen)).cpu()
+        global_abs_los  = (running_sum_abs_los  / float(n_seen)).cpu()
+        global_signed_x = (running_sum_signed_x / float(n_seen)).cpu()
+        global_signed_los = (running_sum_signed_los / float(n_seen)).cpu()
+        global_delta = (running_sum_delta / float(n_seen)).cpu()
+
+        return global_abs_x, global_abs_los, global_signed_x, global_signed_los, global_delta
+
+    # otherwise, concatenate and reduce
+    if len(scores_abs_x) == 0:
+        raise RuntimeError("No scores collected.")
+
+    all_abs_x = torch.cat(scores_abs_x, dim=0)  # [n_samples, N]
+    all_abs_los  = torch.cat(scores_abs_los,  dim=0)
+    all_signed_x = torch.cat(scores_signed_x, dim=0)
+    all_signed_los = torch.cat(scores_signed_los, dim=0)
+    all_delta = torch.cat(scores_delta, dim=0)
+
+    if reduce == "mean":
+        global_abs_x = all_abs_x.mean(dim=0)
+        global_abs_los  = all_abs_los.mean(dim=0)
+        global_signed_x = all_signed_x.mean(dim=0)
+        global_signed_los  = all_signed_los.mean(dim=0)
+        global_delta = all_delta.mean(dim=0)
+    elif reduce == "median":
+        global_abs_x = all_abs_x.median(dim=0).values
+        global_abs_los  = all_abs_los.median(dim=0).values
+        global_signed_x = all_signed_x.median(dim=0).values
+        global_signed_los  = all_signed_los.median(dim=0).values
+        global_delta = all_delta.median(dim=0).values
+    else:
+        raise ValueError(reduce)
+
+    return global_abs_x, global_abs_los, global_signed_x, global_signed_los, global_delta
+
+from src.utils.seed_set import set_seed
+from src.explainers.stablity_report import (
+    stability_report, 
+    print_stability_report, 
+    unstable_variables_report, 
+    print_unstable_report_with_names,
+    importance_mean_std_table,
+    report
+)
+
+def ig_main(
+    dataset,
+    dataloader,
+    model,
+    save_path: str,
+    edge_index: torch.Tensor,     # [2, E]
+    target: str = "logit",        # "logit" only for now
+    n_steps: int = 50,
+    reduce: Literal["mean", "median"] = "mean",
+    keep_all: bool = False,
+    max_batches: Optional[int] = None,
+    verbose: bool = True,
+    sample_ratio: float = 0.1,
+    ):
+    
+    outs_abs_x = []
+    outs_abs_los = []
+    outs_signed_x = []
+    outs_signed_los = []
+    outs_delta = []
+    
+    for s in [0, 1, 2]:
+        set_seed(s)
+        global_abs_x, global_abs_los, global_signed_x, global_signed_los, global_delta = explain_ig_for_dataset(
+            dataloader=dataloader,
+            model=model,
+            edge_index=edge_index,
+            target=target,
+            n_steps=n_steps,
+            reduce=reduce,
+            keep_all=keep_all,
+            max_batches=max_batches,
+            verbose=verbose,
+            sample_ratio=sample_ratio,
+            seed=s
+        )
+        
+        outs_abs_x.append(global_abs_x.cpu().float())
+        outs_abs_los.append(global_abs_los.cpu().float())
+        outs_signed_x.append(global_signed_x.cpu().float())
+        outs_signed_los.append(global_signed_los.cpu().float())
+        outs_delta.append(global_delta.cpu().float())
+
+    col_names, col_dims, ad_col_index, dis_col_index = dataset.col_info
+
+    df_abs_x = importance_mean_std_table(outs_abs_x, col_names)
+    df_abs_los = importance_mean_std_table(outs_abs_los, col_names)
+    df_signed_x = importance_mean_std_table(outs_signed_x, col_names)
+    df_signed_los = importance_mean_std_table(outs_signed_los, col_names)
+    df_delta = importance_mean_std_table(outs_delta, col_names)
+
+    report(df_abs_x, outs_abs_x, col_names, save_path, f"IG_abs_x_global_importance.csv")
+    report(df_abs_los, outs_abs_los, col_names, save_path, f"IG_abs_los_global_importance.csv")
+    report(df_signed_x, outs_signed_x, col_names, save_path, f"IG_signed_x_global_importance.csv")
+    report(df_signed_los, outs_signed_los, col_names, save_path, f"IG_signed_los_global_importance.csv")
+    report(df_delta, outs_delta, col_names, save_path, f"IG_delta_global_importance.csv")

@@ -316,6 +316,57 @@ class CTMPGIN(nn.Module):
         logit = self.classifier_b(fused)
         return logit
 
+    def forward_from_x_emb_with_edge_attr(
+        self,
+        x_embedded: torch.Tensor,      # [B, 72, emb_dim]
+        edge_index: torch.Tensor,      # [2, E_internal]
+        edge_index_2: torch.Tensor,    # [2, E_total]
+        edge_attr: torch.Tensor,       # [E_total, D_los]
+    ):
+        batch_size = x_embedded.size(0)
+        num_nodes = len(self.ad_idx_t)
+
+        self.ad_idx_t = self.ad_idx_t.to(self.device)
+        self.dis_idx_t = self.dis_idx_t.to(self.device)
+
+        # [2B, N, emb_dim]
+        x_seperated = seperate_x(
+            x=x_embedded,
+            ad_idx_t=self.ad_idx_t,
+            dis_idx_t=self.dis_idx_t,
+        )
+
+        # [2B*N, emb_dim]
+        x_flatten = x_seperated.reshape(batch_size * 2 * num_nodes, -1)
+
+        x_after_gin = x_flatten
+        for layer in self.gin_1:
+            x_after_gin = layer(x_after_gin, edge_index)
+            x_graph = x_after_gin.reshape(batch_size * 2, num_nodes, self.gin_hidden_channel)
+            x_sum = torch.mean(x_graph, dim=1)  # [2B, F]
+
+        ad_dis_emb = x_sum
+        ad_emb = ad_dis_emb[:batch_size]
+        dis_emb = ad_dis_emb[batch_size:]
+
+        # ✅ 여기서부터가 핵심: edge_attr를 외부에서 주입
+        for layer in self.gin_2:
+            x_after_gin = layer(x=x_after_gin, edge_index=edge_index_2, edge_attr=edge_attr)
+            x_graph = x_after_gin.reshape(batch_size * 2, num_nodes, self.gin_hidden_channel_2)
+            x_sum = torch.mean(x_graph, dim=1)  # [2B, F2]
+
+        merged_all = x_sum
+        merged = 0.5 * (merged_all[:batch_size] + merged_all[batch_size:])  # [B, F2]
+        merged_f = self.proj_merged(merged)
+
+        ad_f = self.proj_ad(ad_emb)
+        dis_f = self.proj_dis(dis_emb)
+
+        fused, w, logits = self.gated_fusion(ad_f, dis_f, merged_f)
+        logit = self.classifier_b(fused)
+        return logit
+
+
 class CtmpGIN_return_emb(nn.Module):
     def __init__(self, 
                  col_info,

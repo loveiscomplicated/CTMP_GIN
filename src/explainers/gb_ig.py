@@ -486,6 +486,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
+from src.explainers.utils import _iter_selected_batches
 
 @dataclass
 class GlobalImportanceOutput:
@@ -500,28 +501,6 @@ class GlobalImportanceOutput:
     all_scores_dis: Optional[torch.Tensor]
 
     n_samples: int
-
-
-def _iter_selected_batches(dataloader, selected_indices):
-    """
-    Yield only selected batches from dataloader, without iterating the full loader.
-
-    Args:
-        dataloader: PyTorch DataLoader
-        selected_indices: sorted list of batch indices to keep
-
-    Yields:
-        (batch_index, batch)
-    """
-    it = iter(dataloader)
-    prev = -1
-    for idx in selected_indices:
-        skip = idx - prev - 1
-        if skip > 0:
-            it = itertools.islice(it, skip, None)
-        batch = next(it)
-        yield idx, batch
-        prev = idx
 
 
 def compute_global_importance_on_loader(

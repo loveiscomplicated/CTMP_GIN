@@ -14,7 +14,8 @@ from src.explainers.stablity_report import (
     print_stability_report, 
     unstable_variables_report, 
     print_unstable_report_with_names,
-    importance_mean_std_table
+    importance_mean_std_table,
+    report
 )
 cur_dir = os.path.dirname(__file__)
 model_path = os.path.join(cur_dir, '..', '..', 'runs', 'temp_ctmp_gin_ckpt', 'ctmp_epoch_36_loss_0.2738.pth')
@@ -64,28 +65,5 @@ def gb_ig_main(model, edge_index, dataset, test_loader, use_abs, device, reduce,
     df_ms_ad = importance_mean_std_table(outs_ad, col_names_ad)
     df_ms_dis = importance_mean_std_table(outs_dis, col_names_dis)
 
-    def report(df_ms, outs, col_names, filename):
-        # 보기 편하게 top/bottom
-        print("\n=== Top 20 (mean ± std) ===")
-        print(df_ms.head(20).to_string(index=False))
-
-        print("\n=== Bottom 20 (mean ± std) ===")
-        print(df_ms.tail(20).to_string(index=False))
-
-        # CSV 저장
-        out_csv = os.path.join(save_path, filename)
-        df_ms.to_csv(out_csv, index=False)
-        print(f"\nSaved: {out_csv}")
-
-        # get reports
-        report = stability_report(outs, ks=[10, 20, 30])
-        print_stability_report(report, ks=[10, 20, 30])
-
-        rep20 = unstable_variables_report(outs, k=20)
-        print_unstable_report_with_names(rep20, col_names)
-
-        rep30 = unstable_variables_report(outs, k=30)
-        print_unstable_report_with_names(rep30, col_names)
-
-    report(df_ms_ad, outs_ad, col_names_ad, f"global_importance_ad_{seed}.csv")
-    report(df_ms_dis, outs_dis, col_names_dis, f"global_importance_dis_{seed}.csv")
+    report(df_ms_ad, outs_ad, col_names_ad, save_path, f"global_importance_ad_{seed}.csv")
+    report(df_ms_dis, outs_dis, col_names_dis, save_path, f"global_importance_dis_{seed}.csv")

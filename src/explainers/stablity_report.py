@@ -3,7 +3,7 @@ from typing import List, Dict, Tuple
 import torch
 import pandas as pd
 import numpy as np
-
+import os
 
 def idx_to_name(idx: int, col_names: list[str]) -> str:
     if idx < 0 or idx >= len(col_names):
@@ -328,3 +328,25 @@ def importance_mean_std_table(
     return df
 
 
+def report(df_ms, outs, col_names, save_path, filename):
+    # 보기 편하게 top/bottom
+    print("\n=== Top 20 (mean ± std) ===")
+    print(df_ms.head(20).to_string(index=False))
+
+    print("\n=== Bottom 20 (mean ± std) ===")
+    print(df_ms.tail(20).to_string(index=False))
+
+    # CSV 저장
+    out_csv = os.path.join(save_path, filename)
+    df_ms.to_csv(out_csv, index=False)
+    print(f"\nSaved: {out_csv}")
+
+    # get reports
+    report = stability_report(outs, ks=[10, 20, 30])
+    print_stability_report(report, ks=[10, 20, 30])
+
+    rep20 = unstable_variables_report(outs, k=20)
+    print_unstable_report_with_names(rep20, col_names)
+
+    rep30 = unstable_variables_report(outs, k=30)
+    print_unstable_report_with_names(rep30, col_names)

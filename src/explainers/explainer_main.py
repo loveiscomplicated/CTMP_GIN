@@ -20,7 +20,7 @@ from src.utils.device_set import device_set
 from src.trainers.utils.early_stopper import EarlyStopper
 
 from src.explainers.gb_ig_main import gb_ig_main
-from src.explainers.integrated_gradients import manual_ig_embeddings
+from src.explainers.integrated_gradients import ig_main
 
 cur_dir = os.path.dirname(__file__)
 root = os.path.join(cur_dir, '..', 'data')
@@ -176,29 +176,25 @@ def main():
                             )
         edge_index = edge_index.to(device) # type: ignore
 
-        counter = 0
-        for batch in test_loader:
-            if counter > 1: break
-            x, y, los = batch
-            x = x.to(device)
-            y = y.to(device)
-            los = los.to(device)
-
-            res = manual_ig_embeddings(model=model, x_idx=x, los_idx=los, edge_index=edge_index, target="logit", n_steps=50)
-            
-            import pickle
-            with open("layer_IG_res.pickle", 'wb') as f:
-                pickle.dump(res, f)
-
-            ig_x, ig_los, delta = res
-            print(ig_x)
-            print(ig_los)
-            print(delta)
-
-            counter += 1
-
         print("\n--------------------Interpreting Models with Integrated Gradients--------------------")
+        save_path = os.path.join(cur_dir, 'results', 'integrated_gradients')
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
         
+        ig_main(
+            dataset=dataset,
+            dataloader=test_loader,
+            model=model,
+            save_path=save_path,
+            edge_index=edge_index,
+            target="logit",
+            n_steps=50,
+            reduce="mean",
+            keep_all=False,
+            max_batches=None,
+            verbose=True,
+            sample_ratio=0.001,
+        )
         print("--------------------Interpreting Models with Integrated Gradients FINISHED--------------------")
 
 if __name__ == "__main__":
