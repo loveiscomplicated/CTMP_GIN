@@ -184,7 +184,7 @@ def explain_ig_for_dataset(
     ):
 
     model.eval()
-    
+
     if not (0.0 < sample_ratio <= 1.0):
         raise ValueError("sample_ratio must be in (0, 1].")
 
@@ -194,7 +194,6 @@ def explain_ig_for_dataset(
     scores_signed_x: List[torch.Tensor] = []
     scores_signed_los: List[torch.Tensor] = []
     scores_delta: List[torch.Tensor] = []
-
 
     running_sum_abs_x: Optional[torch.Tensor] = None
     running_sum_abs_los: Optional[torch.Tensor] = None
@@ -211,21 +210,23 @@ def explain_ig_for_dataset(
     effective_batches = min(total_batches, max_batches) if max_batches is not None else total_batches
 
     if sample_ratio < 1.0:
-            g = torch.Generator().manual_seed(seed)
-            n_pick = max(1, int(round(effective_batches * sample_ratio)))
-            perm = torch.randperm(effective_batches, generator=g).tolist()
-            selected = sorted(perm[:n_pick])
-            if verbose:
-                print(f"[Integrated Gradients] Sampling batches: {n_pick}/{effective_batches} (ratio={sample_ratio}, seed={seed})")
+        g = torch.Generator().manual_seed(seed)
+        n_pick = max(1, int(round(effective_batches * sample_ratio)))
+        perm = torch.randperm(effective_batches, generator=g).tolist()
+        selected = sorted(perm[:n_pick])
+        if verbose:
+            print(f"[Integrated Gradients] Sampling batches: {n_pick}/{effective_batches} (ratio={sample_ratio}, seed={seed})")
     else:
         selected = list(range(effective_batches))
 
     iterator = _iter_selected_batches(dataloader, selected)
     pbar = tqdm(iterator, total=len(selected), desc="IG (dataset)")
 
+    eps = 1e-12  # safeguard for rare zero-total cases
+
     for b_idx, batch in pbar:
         x_idx, y_idx, los_idx = batch
-        
+
         res = manual_ig_embeddings(
             model=model,
             x_idx=x_idx,
@@ -235,35 +236,47 @@ def explain_ig_for_dataset(
             n_steps=n_steps,
         )
 
-        imp_abs_x = res["imp_abs_x"]
-        imp_abs_los = res["imp_abs_los"]
-        imp_signed_x = res["imp_signed_x"]
-        imp_signed_los = res["imp_signed_los"]
-        delta = res["delta"]
+        imp_abs_x = res["imp_abs_x"]           # [B,72]
+        imp_abs_los = res["imp_abs_los"]       # [B]
+        imp_signed_x = res["imp_signed_x"]     # [B,72] (leave as-is)
+        imp_signed_los = res["imp_signed_los"] # [B]    (leave as-is)
+        delta = res["delta"]                   # [B]    (leave as-is)
 
-        B = imp_abs_x.size(0)
+        # -----------------------------
+        # NEW: per-sample share (ABS only)
+        # -----------------------------
+        # total_abs per sample: [B]
+        total_abs = imp_abs_x.sum(dim=1) + imp_abs_los
+        total_abs = total_abs + eps  # avoid divide-by-zero
+
+        share_x = imp_abs_x / total_abs.unsqueeze(1)  # [B,72]
+        share_los = imp_abs_los / total_abs           # [B]
+
+        B = share_x.size(0)
         n_seen += B
 
         if reduce == "mean" and not keep_all:
+            # NOTE: we now accumulate shares instead of raw abs importances
             if running_sum_abs_x is None:
-                running_sum_abs_x = imp_abs_x.detach().sum(dim=0)
-                running_sum_abs_los = imp_abs_los.detach().sum(dim=0)
-                running_sum_signed_x = imp_signed_x.detach().sum(dim=0)
-                running_sum_signed_los = imp_signed_los.detach().sum(dim=0)
-                running_sum_delta = delta.detach().sum(dim=0)
+                running_sum_abs_x = share_x.detach().sum(dim=0)          # [72]
+                running_sum_abs_los = share_los.detach().sum(dim=0)      # scalar tensor
+                running_sum_signed_x = imp_signed_x.detach().sum(dim=0)  # [72]
+                running_sum_signed_los = imp_signed_los.detach().sum(dim=0)  # scalar tensor
+                running_sum_delta = delta.detach().sum(dim=0)            # scalar tensor
             else:
-                running_sum_abs_x += imp_abs_x.detach().sum(dim=0)
-                running_sum_abs_los  += imp_abs_los.detach().sum(dim=0)
+                running_sum_abs_x += share_x.detach().sum(dim=0)
+                running_sum_abs_los += share_los.detach().sum(dim=0)
                 running_sum_signed_x += imp_signed_x.detach().sum(dim=0)
                 running_sum_signed_los += imp_signed_los.detach().sum(dim=0)
                 running_sum_delta += delta.detach().sum(dim=0)
         else:
-            scores_abs_x.append(imp_abs_x.detach().cpu())
-            scores_abs_los.append(imp_abs_los.detach().cpu())
+            # keep_all path stores per-sample shares for ABS, raw for signed/delta
+            scores_abs_x.append(share_x.detach().cpu())
+            scores_abs_los.append(share_los.detach().cpu())
             scores_signed_x.append(imp_signed_x.detach().cpu())
             scores_signed_los.append(imp_signed_los.detach().cpu())
             scores_delta.append(delta.detach().cpu())
-    
+
     # ---- aggregate ----
     if n_seen == 0:
         raise RuntimeError("No samples processed.")
@@ -274,9 +287,12 @@ def explain_ig_for_dataset(
             raise RuntimeError("No samples processed (running_sum_abs is None).")
         if running_sum_signed_x is None:
             raise RuntimeError("No samples processed (running_sum_signed is None).")
-        
-        global_abs_x = (running_sum_abs_x / float(n_seen)).cpu()
-        global_abs_los  = (running_sum_abs_los  / float(n_seen)).cpu()
+
+        # ABS outputs are now mean shares
+        global_abs_x = (running_sum_abs_x / float(n_seen)).cpu()          # [72], mean share
+        global_abs_los = (running_sum_abs_los / float(n_seen)).cpu()      # scalar, mean share
+
+        # signed + delta unchanged
         global_signed_x = (running_sum_signed_x / float(n_seen)).cpu()
         global_signed_los = (running_sum_signed_los / float(n_seen)).cpu()
         global_delta = (running_sum_delta / float(n_seen)).cpu()
@@ -287,35 +303,31 @@ def explain_ig_for_dataset(
     if len(scores_abs_x) == 0:
         raise RuntimeError("No scores collected.")
 
-    all_abs_x = torch.cat(scores_abs_x, dim=0)  # [n_samples, N]
-    all_abs_los  = torch.cat(scores_abs_los,  dim=0)
-    all_signed_x = torch.cat(scores_signed_x, dim=0)
-    all_signed_los = torch.cat(scores_signed_los, dim=0)
-    all_delta = torch.cat(scores_delta, dim=0)
+    all_abs_x = torch.cat(scores_abs_x, dim=0)        # [n_samples, 72] (shares)
+    all_abs_los = torch.cat(scores_abs_los, dim=0)    # [n_samples]      (shares)
+    all_signed_x = torch.cat(scores_signed_x, dim=0)  # [n_samples, 72]
+    all_signed_los = torch.cat(scores_signed_los, dim=0)  # [n_samples]
+    all_delta = torch.cat(scores_delta, dim=0)        # [n_samples]
 
     if reduce == "mean":
-        global_abs_x = all_abs_x.mean(dim=0)
-        global_abs_los  = all_abs_los.mean(dim=0)
+        global_abs_x = all_abs_x.mean(dim=0)          # mean share per feature
+        global_abs_los = all_abs_los.mean(dim=0)      # mean share for LOS
         global_signed_x = all_signed_x.mean(dim=0)
-        global_signed_los  = all_signed_los.mean(dim=0)
+        global_signed_los = all_signed_los.mean(dim=0)
         global_delta = all_delta.mean(dim=0)
     elif reduce == "median":
         global_abs_x = all_abs_x.median(dim=0).values
-        global_abs_los  = all_abs_los.median(dim=0).values
+        global_abs_los = all_abs_los.median(dim=0).values
         global_signed_x = all_signed_x.median(dim=0).values
-        global_signed_los  = all_signed_los.median(dim=0).values
+        global_signed_los = all_signed_los.median(dim=0).values
         global_delta = all_delta.median(dim=0).values
     else:
         raise ValueError(reduce)
 
-    return global_abs_x, global_abs_los, global_signed_x, global_signed_los, global_delta
+    return global_abs_x, global_abs_los, global_signed_x, global_signed_los, global_delta # abs: share (ratio) 
 
 from src.utils.seed_set import set_seed
 from src.explainers.stablity_report import (
-    stability_report, 
-    print_stability_report, 
-    unstable_variables_report, 
-    print_unstable_report_with_names,
     importance_mean_std_table,
     report
 )
@@ -366,13 +378,13 @@ def ig_main(
     col_names, col_dims, ad_col_index, dis_col_index = dataset.col_info
 
     df_abs_x = importance_mean_std_table(outs_abs_x, col_names)
-    df_abs_los = importance_mean_std_table(outs_abs_los, col_names)
+    df_abs_los = importance_mean_std_table(outs_abs_los, ["LOS"])
     df_signed_x = importance_mean_std_table(outs_signed_x, col_names)
-    df_signed_los = importance_mean_std_table(outs_signed_los, col_names)
-    df_delta = importance_mean_std_table(outs_delta, col_names)
+    df_signed_los = importance_mean_std_table(outs_signed_los, ["LOS"])
+    df_delta = importance_mean_std_table(outs_delta, ["delta"])
 
     report(df_abs_x, outs_abs_x, col_names, save_path, f"IG_abs_x_global_importance.csv")
-    report(df_abs_los, outs_abs_los, col_names, save_path, f"IG_abs_los_global_importance.csv")
+    report(df_abs_los, outs_abs_los, ["LOS"], save_path, f"IG_abs_los_global_importance.csv", scalar=True)
     report(df_signed_x, outs_signed_x, col_names, save_path, f"IG_signed_x_global_importance.csv")
-    report(df_signed_los, outs_signed_los, col_names, save_path, f"IG_signed_los_global_importance.csv")
-    report(df_delta, outs_delta, col_names, save_path, f"IG_delta_global_importance.csv")
+    report(df_signed_los, outs_signed_los, ["LOS"], save_path, f"IG_signed_los_global_importance.csv", scalar=True)
+    report(df_delta, outs_delta, ["delta"], save_path, f"IG_delta_global_importance.csv", scalar=True)
