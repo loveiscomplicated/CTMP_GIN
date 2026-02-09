@@ -14,22 +14,16 @@ def _make_baseline_los_like(los_idx: torch.Tensor) -> torch.Tensor:
 
 def manual_ig_embeddings(
     model,
-    x_idx: torch.Tensor,          # [B, 72] long
-    los_idx: torch.Tensor,        # [B] long
-    edge_index: torch.Tensor,     # [2, E_internal]
-    target: str = "logit",        # "logit" only for now
-    n_steps: int = 50,
-    return_full: bool = False,    # True면 ig_x([B,72,D])/ig_los([B,Dlos])도 같이 반환
-) -> Dict[str, torch.Tensor]:
-    """
-    Requires model has:
-      - entity_embedding_layer(x_idx) -> [B,72,emb_dim]
-      - get_edge_index_2(edge_index, num_nodes, batch_size) -> [2, E_total]
-      - get_edge_attr(los, edge_index, batch_size, num_nodes) -> [E_total, D_los]
-      - forward_from_x_emb(x_embedded, los, edge_index) -> [B,1] or [B]
-      - forward_from_x_emb_with_edge_attr(x_embedded, edge_index, edge_index_2, edge_attr) -> [B,1] or [B]
-    """
-    assert target == "logit", "manual_ig_embeddings: target='logit' only."
+    x_idx,
+    los_idx,
+    edge_index,
+    target="logit",
+    n_steps=50,
+    return_full=False,
+):
+
+    assert target == "logit"
+    eps = 1e-12  # safeguard for rare zero-total cases
 
     model.eval()
     device = next(model.parameters()).device
@@ -39,122 +33,128 @@ def manual_ig_embeddings(
     edge_index = edge_index.to(device)
 
     B = x_idx.size(0)
-    num_nodes = len(model.ad_col_index)  # CTMPGIN 기준
+    num_nodes = len(model.ad_col_index)
 
-    # -------------------------
-    # Baselines (indices)
-    # -------------------------
-    base_x_idx = _make_baseline_x_like(x_idx).to(device)
-    base_los_idx = _make_baseline_los_like(los_idx).to(device)
+    # ---------- baseline indices ----------
+    base_x_idx = torch.zeros_like(x_idx)
+    base_los_idx = torch.zeros_like(los_idx)
 
-    # -------------------------
-    # Continuous embeddings (x)
-    # -------------------------
-    x_emb = model.entity_embedding_layer(x_idx)         # [B,72,Dx]
+    # ---------- embeddings ----------
+    x_emb = model.entity_embedding_layer(x_idx)
     base_x_emb = model.entity_embedding_layer(base_x_idx)
 
-    def f_from_xemb(xemb: torch.Tensor, los_indices: torch.Tensor) -> torch.Tensor:
-        out = model.forward_from_x_emb(xemb, los_indices, edge_index)
-        return out.squeeze(-1)  # [B]
+    dx = x_emb - base_x_emb
 
-    # ==========================================================
-    # 1) IG for variables in embedding space: IG over x_emb
-    # ==========================================================
-    dx = (x_emb - base_x_emb)
-    total_grads_x = torch.zeros_like(x_emb)
-
-    for s in range(1, n_steps + 1):
-        alpha = float(s) / n_steps
-        x_s = (base_x_emb + alpha * dx).detach().requires_grad_(True)
-
-        out = f_from_xemb(x_s, los_idx)  # [B]
-        grads = torch.autograd.grad(out.sum(), x_s, retain_graph=False, create_graph=False)[0]
-        total_grads_x += grads
-
-    avg_grads_x = total_grads_x / float(n_steps)
-    ig_x = dx * avg_grads_x  # [B,72,Dx]
-
-    # ==========================================================
-    # 2) IG for LOS via edge_attr path: IG over edge_attr
-    #    (edge_attr는 [E_total, D_los] 이고, cross-edge만 sample별로 모음)
-    # ==========================================================
-    # Build fixed edge_index_2 once
     edge_index_2 = model.get_edge_index_2(
-        edge_index=edge_index, num_nodes=num_nodes, batch_size=B
+        edge_index=edge_index,
+        num_nodes=num_nodes,
+        batch_size=B,
     ).to(device)
 
-    # Actual / baseline edge_attr
     edge_attr_1 = model.get_edge_attr(
-        los=los_idx, edge_index=edge_index, batch_size=B, num_nodes=num_nodes
-    ).to(device)
+        los=los_idx,
+        edge_index=edge_index,
+        batch_size=B,
+        num_nodes=num_nodes,
+    )
 
     edge_attr_0 = model.get_edge_attr(
-        los=torch.zeros_like(los_idx), edge_index=edge_index, batch_size=B, num_nodes=num_nodes
-    ).to(device)
+        los=base_los_idx,
+        edge_index=edge_index,
+        batch_size=B,
+        num_nodes=num_nodes,
+    )
 
-    d_edge = (edge_attr_1 - edge_attr_0)
-    total_grads_ea = torch.zeros_like(edge_attr_1)
+    d_edge = edge_attr_1 - edge_attr_0
 
-    # x는 actual로 고정한 상태에서 LOS만 IG
-    x_emb_det = x_emb.detach()
+    # ---------- accumulators ----------
+    total_grad_x = torch.zeros_like(x_emb)
+    total_grad_e = torch.zeros_like(edge_attr_1)
 
+    # ==================================================
+    # JOINT IG LOOP
+    # ==================================================
     for s in range(1, n_steps + 1):
-        alpha = float(s) / n_steps
-        ea_s = (edge_attr_0 + alpha * d_edge).detach().requires_grad_(True)
+
+        alpha = s / n_steps
+
+        x_s = (base_x_emb + alpha * dx).detach().requires_grad_(True)
+        e_s = (edge_attr_0 + alpha * d_edge).detach().requires_grad_(True)
 
         out = model.forward_from_x_emb_with_edge_attr(
-            x_embedded=x_emb_det,
+            x_embedded=x_s,
             edge_index=edge_index,
             edge_index_2=edge_index_2,
-            edge_attr=ea_s,
-        ).squeeze(-1)  # [B]
+            edge_attr=e_s,
+        ).squeeze(-1)
 
-        grads = torch.autograd.grad(out.sum(), ea_s, retain_graph=False, create_graph=False)[0]
-        total_grads_ea += grads
+        grad_x, grad_e = torch.autograd.grad(
+            out.sum(),
+            [x_s, e_s],
+            retain_graph=False,
+            create_graph=False,
+        )
 
-    avg_grads_ea = total_grads_ea / float(n_steps)
-    ig_edge_attr = d_edge * avg_grads_ea  # [E_total, D_los]
+        total_grad_x += grad_x
+        total_grad_e += grad_e
 
-    # Cross edges만 모아 per-sample LOS attribution 만들기
+    # ---------- IG ----------
+    avg_grad_x = total_grad_x / n_steps
+    avg_grad_e = total_grad_e / n_steps
+
+    ig_x = dx * avg_grad_x
+    ig_edge = d_edge * avg_grad_e
+
+    # LOS aggregation
     E_cross = B * num_nodes
-    E_total = ig_edge_attr.size(0)
-    cross = ig_edge_attr[E_total - E_cross:]                 # [B*N, D_los]
-    ig_los = cross.reshape(B, num_nodes, -1).sum(dim=1)      # [B, D_los]
+    cross = ig_edge[-E_cross:]
+    ig_los = cross.reshape(B, num_nodes, -1).sum(dim=1)
+    ig_abs_los = torch.abs(cross.reshape(B, num_nodes, -1)).sum(dim=1)
 
-    # ==========================================================
-    # 3) Reduce to variable-level scores (abs / signed)
-    # ==========================================================
-    imp_abs_x = ig_x.abs().sum(dim=-1)       # [B,72]
-    imp_signed_x = ig_x.sum(dim=-1)          # [B,72]
+    # ---------- reductions ----------
+    imp_abs_x = ig_x.abs().sum(dim=-1)
+    imp_signed_x = ig_x.sum(dim=-1)
 
-    imp_abs_los = ig_los.abs().sum(dim=-1)   # [B]
-    imp_signed_los = ig_los.sum(dim=-1)      # [B]
+    imp_abs_los = ig_abs_los.sum(dim=-1)
+    imp_signed_los = ig_los.sum(dim=-1)
 
-    # ==========================================================
-    # 4) Completeness-ish delta (SIGNED로만)
-    # ==========================================================
+    # ---------- delta ----------
     with torch.no_grad():
-        fx = f_from_xemb(x_emb, los_idx)              # [B]
-        f0 = f_from_xemb(base_x_emb, base_los_idx)    # [B]
 
-        ig_x_scalar = imp_signed_x.sum(dim=1)         # [B]
-        ig_los_scalar = imp_signed_los                # [B]
-        delta = (fx - f0) - (ig_x_scalar + ig_los_scalar)  # [B]
+        fx = model.forward_from_x_emb_with_edge_attr(
+            x_embedded=x_emb,
+            edge_index=edge_index,
+            edge_index_2=edge_index_2,
+            edge_attr=edge_attr_1,
+        ).squeeze(-1)
+
+        f0 = model.forward_from_x_emb_with_edge_attr(
+            x_embedded=base_x_emb,
+            edge_index=edge_index,
+            edge_index_2=edge_index_2,
+            edge_attr=edge_attr_0,
+        ).squeeze(-1)
+
+        ig_scalar = imp_signed_x.sum(dim=1) + imp_signed_los
+        delta = (fx - f0) - ig_scalar
+        delta_ratio = torch.abs(delta) / (torch.abs(fx - f0) + eps)
 
     out = {
-        "imp_abs_x": imp_abs_x,               # [B,72]
-        "imp_signed_x": imp_signed_x,         # [B,72]
-        "imp_abs_los": imp_abs_los,           # [B]
-        "imp_signed_los": imp_signed_los,     # [B]
-        "delta": delta,                       # [B]
+        "imp_abs_x": imp_abs_x,
+        "imp_signed_x": imp_signed_x,
+        "imp_abs_los": imp_abs_los,
+        "imp_signed_los": imp_signed_los,
+        "delta": delta,
+        "delta_ratio": delta_ratio,
     }
 
     if return_full:
-        out["ig_x"] = ig_x                   # [B,72,Dx]
-        out["ig_los"] = ig_los               # [B,D_los]
-        out["ig_edge_attr"] = ig_edge_attr   # [E_total,D_los]
+        out["ig_x"] = ig_x
+        out["ig_los"] = ig_los
+        out["ig_edge"] = ig_edge
 
     return out
+
 
 
 from tqdm import tqdm
@@ -194,12 +194,14 @@ def explain_ig_for_dataset(
     scores_signed_x: List[torch.Tensor] = []
     scores_signed_los: List[torch.Tensor] = []
     scores_delta: List[torch.Tensor] = []
+    scores_delta_ratio: List[torch.Tensor] = []
 
     running_sum_abs_x: Optional[torch.Tensor] = None
     running_sum_abs_los: Optional[torch.Tensor] = None
     running_sum_signed_x: Optional[torch.Tensor] = None
     running_sum_signed_los: Optional[torch.Tensor] = None
     running_sum_delta: Optional[torch.Tensor] = None
+    running_sum_delta_ratio: Optional[torch.Tensor] = None
 
     n_seen = 0
 
@@ -241,6 +243,7 @@ def explain_ig_for_dataset(
         imp_signed_x = res["imp_signed_x"]     # [B,72] (leave as-is)
         imp_signed_los = res["imp_signed_los"] # [B]    (leave as-is)
         delta = res["delta"]                   # [B]    (leave as-is)
+        delta_ratio = res["delta_ratio"]
 
         # -----------------------------
         # NEW: per-sample share (ABS only)
@@ -263,12 +266,14 @@ def explain_ig_for_dataset(
                 running_sum_signed_x = imp_signed_x.detach().sum(dim=0)  # [72]
                 running_sum_signed_los = imp_signed_los.detach().sum(dim=0)  # scalar tensor
                 running_sum_delta = delta.detach().sum(dim=0)            # scalar tensor
+                running_sum_delta_ratio = delta_ratio.detach().sum(dim=0) # scalar tensor
             else:
                 running_sum_abs_x += share_x.detach().sum(dim=0)
                 running_sum_abs_los += share_los.detach().sum(dim=0)
                 running_sum_signed_x += imp_signed_x.detach().sum(dim=0)
                 running_sum_signed_los += imp_signed_los.detach().sum(dim=0)
                 running_sum_delta += delta.detach().sum(dim=0)
+                running_sum_delta_ratio += delta_ratio.detach().sum(dim=0)
         else:
             # keep_all path stores per-sample shares for ABS, raw for signed/delta
             scores_abs_x.append(share_x.detach().cpu())
@@ -276,6 +281,8 @@ def explain_ig_for_dataset(
             scores_signed_x.append(imp_signed_x.detach().cpu())
             scores_signed_los.append(imp_signed_los.detach().cpu())
             scores_delta.append(delta.detach().cpu())
+            scores_delta_ratio.append(delta_ratio.detach().cpu())
+
 
     # ---- aggregate ----
     if n_seen == 0:
@@ -296,8 +303,18 @@ def explain_ig_for_dataset(
         global_signed_x = (running_sum_signed_x / float(n_seen)).cpu()
         global_signed_los = (running_sum_signed_los / float(n_seen)).cpu()
         global_delta = (running_sum_delta / float(n_seen)).cpu()
+        global_delta_ratio = (running_sum_delta_ratio / float(n_seen)).cpu()
 
-        return global_abs_x, global_abs_los, global_signed_x, global_signed_los, global_delta
+        res = {
+            "global_abs_x": global_abs_x,
+            "global_abs_los": global_abs_los,
+            "global_signed_x": global_signed_x,
+            "global_signed_los": global_signed_los,
+            "global_delta": global_delta,
+            "global_delta_ratio": global_delta_ratio,
+        }
+
+        return res
 
     # otherwise, concatenate and reduce
     if len(scores_abs_x) == 0:
@@ -308,6 +325,7 @@ def explain_ig_for_dataset(
     all_signed_x = torch.cat(scores_signed_x, dim=0)  # [n_samples, 72]
     all_signed_los = torch.cat(scores_signed_los, dim=0)  # [n_samples]
     all_delta = torch.cat(scores_delta, dim=0)        # [n_samples]
+    all_delta_ratio = torch.cat(scores_delta_ratio, dim=0) # [n_samples]
 
     if reduce == "mean":
         global_abs_x = all_abs_x.mean(dim=0)          # mean share per feature
@@ -315,16 +333,52 @@ def explain_ig_for_dataset(
         global_signed_x = all_signed_x.mean(dim=0)
         global_signed_los = all_signed_los.mean(dim=0)
         global_delta = all_delta.mean(dim=0)
+        global_delta_ratio = all_delta_ratio.mean(dim=0)
     elif reduce == "median":
         global_abs_x = all_abs_x.median(dim=0).values
         global_abs_los = all_abs_los.median(dim=0).values
         global_signed_x = all_signed_x.median(dim=0).values
         global_signed_los = all_signed_los.median(dim=0).values
         global_delta = all_delta.median(dim=0).values
+        global_delta_ratio = all_delta_ratio.median(dim=0).values
     else:
         raise ValueError(reduce)
+    
+    
 
-    return global_abs_x, global_abs_los, global_signed_x, global_signed_los, global_delta # abs: share (ratio) 
+    def _make_stat_dict(_all_scores):
+        stats = {
+            "mean": _all_scores.mean().item(),
+            "median": _all_scores.median().item(),
+            "p90": torch.quantile(_all_scores, 0.90).item(),
+            "p95": torch.quantile(_all_scores, 0.95).item(),
+            "p99": torch.quantile(_all_scores, 0.99).item(),
+            "max": _all_scores.max().item(),
+        }
+        return stats
+    
+    los_share = all_abs_los.detach().cpu().float()
+    delta_share = all_delta.detach().cpu().float()
+    delta_ratio_share = all_delta_ratio.detach().cpu().float()
+
+    los_stats = _make_stat_dict(los_share)
+    delta_stats = _make_stat_dict(delta_share)
+    delta_ratio_stats = _make_stat_dict(delta_ratio_share)
+
+    res = {
+        "global_abs_x": global_abs_x,
+        "global_abs_los": global_abs_los,
+        "global_signed_x": global_signed_x,
+        "global_signed_los": global_signed_los,
+        "global_delta": global_delta,
+        "global_delta_ratio": global_delta_ratio,
+        "los_abs_stats": los_stats,
+        "delta_stats": delta_stats,
+        "delta_ratio_stats": delta_ratio_stats,
+
+    }
+
+    return res # abs: share (ratio) 
 
 from src.utils.seed_set import set_seed
 from src.explainers.stablity_report import (
@@ -352,10 +406,14 @@ def ig_main(
     outs_signed_x = []
     outs_signed_los = []
     outs_delta = []
+    outs_delta_ratio = []
+    los_abs_stats_list = []
+    delta_stats_list = []
+    delta_ratio_stats_list = []
     
     for s in [0, 1, 2]:
         set_seed(s)
-        global_abs_x, global_abs_los, global_signed_x, global_signed_los, global_delta = explain_ig_for_dataset(
+        res = explain_ig_for_dataset(
             dataloader=dataloader,
             model=model,
             edge_index=edge_index,
@@ -369,11 +427,15 @@ def ig_main(
             seed=s
         )
         
-        outs_abs_x.append(global_abs_x.cpu().float())
-        outs_abs_los.append(global_abs_los.cpu().float())
-        outs_signed_x.append(global_signed_x.cpu().float())
-        outs_signed_los.append(global_signed_los.cpu().float())
-        outs_delta.append(global_delta.cpu().float())
+        outs_abs_x.append(res["global_abs_x"].cpu().float())
+        outs_abs_los.append(res["global_abs_los"].cpu().float())
+        outs_signed_x.append(res["global_signed_x"].cpu().float())
+        outs_signed_los.append(res["global_signed_los"].cpu().float())
+        outs_delta.append(res["global_delta"].cpu().float())
+        outs_delta_ratio.append(res["global_delta_ratio"].cpu().float())
+        los_abs_stats_list.append(res.get("los_abs_stats", None))
+        delta_stats_list.append(res.get("delta_stats", None))
+        delta_ratio_stats_list.append(res.get("delta_ratio_stats", None))
 
     col_names, col_dims, ad_col_index, dis_col_index = dataset.col_info
 
@@ -382,9 +444,25 @@ def ig_main(
     df_signed_x = importance_mean_std_table(outs_signed_x, col_names)
     df_signed_los = importance_mean_std_table(outs_signed_los, ["LOS"])
     df_delta = importance_mean_std_table(outs_delta, ["delta"])
+    df_delta_ratio = importance_mean_std_table(outs_delta_ratio, ["delta_ratio"])
 
-    report(df_abs_x, outs_abs_x, col_names, save_path, f"IG_abs_x_global_importance.csv")
-    report(df_abs_los, outs_abs_los, ["LOS"], save_path, f"IG_abs_los_global_importance.csv", scalar=True)
-    report(df_signed_x, outs_signed_x, col_names, save_path, f"IG_signed_x_global_importance.csv")
-    report(df_signed_los, outs_signed_los, ["LOS"], save_path, f"IG_signed_los_global_importance.csv", scalar=True)
-    report(df_delta, outs_delta, ["delta"], save_path, f"IG_delta_global_importance.csv", scalar=True)
+    report(df_abs_x, outs_abs_x, col_names, save_path, f"IG_abs_x_{reduce}_{sample_ratio}_global_importance.csv")
+    report(df_abs_los, outs_abs_los, ["LOS"], save_path, f"IG_abs_los_{reduce}_{sample_ratio}_global_importance.csv", scalar=True)
+    report(df_signed_x, outs_signed_x, col_names, save_path, f"IG_signed_x_{reduce}_{sample_ratio}_global_importance.csv")
+    report(df_signed_los, outs_signed_los, ["LOS"], save_path, f"IG_signed_los_{reduce}_{sample_ratio}_global_importance.csv", scalar=True)
+    report(df_delta, outs_delta, ["delta"], save_path, f"IG_delta_{reduce}_{sample_ratio}_global_importance.csv", scalar=True)
+    report(df_delta_ratio, outs_delta_ratio, ["delta_ratio"], save_path, f"IG_delta_ratio_{reduce}_{sample_ratio}_global_importance.csv", scalar=True)
+
+    if keep_all:
+        def _print_stats(name, stats_list):
+            if stats_list[0] is None: 
+                return
+            
+            for seed, stats in enumerate(stats_list):
+                print(f"\n[{name} distribution](seed: {seed})")
+                for k, v in stats.items():
+                    print(f"  {k:>6}: {v:.6f}")
+
+        _print_stats("LOS_abs", los_abs_stats_list)
+        _print_stats("delta", delta_stats_list)
+        _print_stats("delta_ratio", delta_ratio_stats_list)
