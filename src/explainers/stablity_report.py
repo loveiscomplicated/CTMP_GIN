@@ -57,6 +57,7 @@ def spearman_corr_torch(x: torch.Tensor, y: torch.Tensor) -> float:
     return float((rx * ry).mean().item())
 
 
+
 def stability_report(
     outs: List[torch.Tensor],
     ks: List[int] = [10, 20, 30],
@@ -64,35 +65,61 @@ def stability_report(
     """
     outs: list of global_importance vectors [N] (CPU or GPU ok)
     """
+
     outs = [o.detach().cpu() for o in outs]
     m = len(outs)
 
+    # --- safety: no pairwise comparison possible ---
+    if m < 2:
+        return {
+            "pair_spearman": [],
+            "spearman_avg": 0.0,
+            "pair_topk": {k: [] for k in ks},
+            "topk_avg": {k: {"overlap_avg": 0.0, "jaccard_avg": 0.0} for k in ks},
+        }
+
     pair_spearman: List[Tuple[Tuple[int, int], float]] = []
-    pair_topk: Dict[int, List[Tuple[Tuple[int, int], float, float]]] = {k: [] for k in ks}
+    pair_topk: Dict[int, List[Tuple[Tuple[int, int], float, float]]] = {
+        k: [] for k in ks
+    }
 
     for i in range(m):
         for j in range(i + 1, m):
             sp = spearman_corr_torch(outs[i], outs[j])
             pair_spearman.append(((i, j), sp))
 
+            # vector length safety
+            N = min(len(outs[i]), len(outs[j]))
+
             for k in ks:
-                ti = topk_indices(outs[i], k)
-                tj = topk_indices(outs[j], k)
+                effective_k = min(k, N)
+
+                if effective_k == 0:
+                    pair_topk[k].append(((i, j), 0.0, 0.0))
+                    continue
+
+                ti = topk_indices(outs[i], effective_k)
+                tj = topk_indices(outs[j], effective_k)
+
                 ov = overlap_ratio(ti, tj)
                 jac = jaccard(ti, tj)
+
                 pair_topk[k].append(((i, j), ov, jac))
 
-    # 평균 요약
-    spearman_avg = sum(v for _, v in pair_spearman) / max(len(pair_spearman), 1)
+    # averages
+    spearman_avg = sum(v for _, v in pair_spearman) / len(pair_spearman)
 
     topk_avg = {}
     for k, lst in pair_topk.items():
-        if len(lst) == 0:
+        if not lst:
             topk_avg[k] = {"overlap_avg": 0.0, "jaccard_avg": 0.0}
         else:
             overlap_avg = sum(v[1] for v in lst) / len(lst)
             jaccard_avg = sum(v[2] for v in lst) / len(lst)
-            topk_avg[k] = {"overlap_avg": overlap_avg, "jaccard_avg": jaccard_avg}
+            topk_avg[k] = {
+                "overlap_avg": overlap_avg,
+                "jaccard_avg": jaccard_avg,
+            }
 
     return {
         "pair_spearman": pair_spearman,
