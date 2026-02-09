@@ -181,11 +181,11 @@ def main():
         if not os.path.exists(save_path):
             os.mkdir(save_path)
 
-        save_path = os.path.join(save_path, 'temp')
+        # save_path = os.path.join(save_path, 'temp')
         
         ig_main(
             dataset=dataset,
-            dataloader=test_loader,
+            dataloader=val_loader,
             model=model,
             save_path=save_path,
             edge_index=edge_index,
@@ -195,7 +195,7 @@ def main():
             keep_all=True,
             max_batches=None,
             verbose=True,
-            sample_ratio=0.0001,
+            sample_ratio=1,
         )
         print("--------------------Interpreting Models with Integrated Gradients FINISHED--------------------")
 

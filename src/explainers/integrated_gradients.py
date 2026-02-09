@@ -436,22 +436,27 @@ def ig_main(
         los_abs_stats_list.append(res.get("los_abs_stats", None))
         delta_stats_list.append(res.get("delta_stats", None))
         delta_ratio_stats_list.append(res.get("delta_ratio_stats", None))
+        
+        if sample_ratio == 1:
+            break
 
     col_names, col_dims, ad_col_index, dis_col_index = dataset.col_info
 
-    df_abs_x = importance_mean_std_table(outs_abs_x, col_names)
-    df_abs_los = importance_mean_std_table(outs_abs_los, ["LOS"])
-    df_signed_x = importance_mean_std_table(outs_signed_x, col_names)
-    df_signed_los = importance_mean_std_table(outs_signed_los, ["LOS"])
-    df_delta = importance_mean_std_table(outs_delta, ["delta"])
-    df_delta_ratio = importance_mean_std_table(outs_delta_ratio, ["delta_ratio"])
+    df_abs_x = importance_mean_std_table(outs_abs_x, col_names, save_path, f"IG_abs_x_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_abs_los = importance_mean_std_table(outs_abs_los, ["LOS"], save_path, f"IG_abs_los_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv",)
+    df_signed_x = importance_mean_std_table(outs_signed_x, col_names, save_path, f"IG_signed_x_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_signed_los = importance_mean_std_table(outs_signed_los, ["LOS"], save_path, f"IG_signed_los_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_delta = importance_mean_std_table(outs_delta, ["delta"], save_path, f"IG_delta_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_delta_ratio = importance_mean_std_table(outs_delta_ratio, ["delta_ratio"], save_path, f"IG_delta_ratio_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
 
-    report(df_abs_x, outs_abs_x, col_names, save_path, f"IG_abs_x_{reduce}_{sample_ratio}_global_importance.csv")
-    report(df_abs_los, outs_abs_los, ["LOS"], save_path, f"IG_abs_los_{reduce}_{sample_ratio}_global_importance.csv", scalar=True)
-    report(df_signed_x, outs_signed_x, col_names, save_path, f"IG_signed_x_{reduce}_{sample_ratio}_global_importance.csv")
-    report(df_signed_los, outs_signed_los, ["LOS"], save_path, f"IG_signed_los_{reduce}_{sample_ratio}_global_importance.csv", scalar=True)
-    report(df_delta, outs_delta, ["delta"], save_path, f"IG_delta_{reduce}_{sample_ratio}_global_importance.csv", scalar=True)
-    report(df_delta_ratio, outs_delta_ratio, ["delta_ratio"], save_path, f"IG_delta_ratio_{reduce}_{sample_ratio}_global_importance.csv", scalar=True)
+
+
+    report(df_abs_x, outs_abs_x, col_names)
+    report(df_abs_los, outs_abs_los, ["LOS"], scalar=True)
+    report(df_signed_x, outs_signed_x, col_names)
+    report(df_signed_los, outs_signed_los, ["LOS"], scalar=True)
+    report(df_delta, outs_delta, ["delta"], scalar=True)
+    report(df_delta_ratio, outs_delta_ratio, ["delta_ratio"], scalar=True)
 
     if keep_all:
         def _print_stats(name, stats_list):

@@ -322,6 +322,8 @@ def full_importance_table(mean_importance: torch.Tensor, col_names: list[str]) -
 def importance_mean_std_table(
     outs: list[torch.Tensor],
     col_names: list[str],
+    save_path, 
+    filename,
     eps: float = 1e-12,
 ) -> pd.DataFrame:
     """
@@ -375,6 +377,12 @@ def importance_mean_std_table(
     })
 
     df = df.sort_values("rank_mean").reset_index(drop=True)
+
+    # CSV 저장
+    out_csv = os.path.join(save_path, filename)
+    df.to_csv(out_csv, index=False)
+    print(f"\nSaved: {out_csv}")
+    
     return df
 
 def stability_report_scalars(
@@ -410,7 +418,7 @@ def print_scalar_stability_report(rep: Dict[str, object], name: str = "LOS") -> 
     print(f"mean: {rep['mean']:.6f}  std: {rep['std']:.6f}  cv: {rep['cv']:.6f}")
 
 
-def report(df_ms, outs, col_names, save_path, filename, scalar=False):
+def report(df_ms, outs, col_names, scalar=False):
     # 보기 편하게 top/bottom
     print("\n=== Top 20 (mean ± std) ===")
     print(df_ms.head(20).to_string(index=False))
@@ -418,10 +426,7 @@ def report(df_ms, outs, col_names, save_path, filename, scalar=False):
     print("\n=== Bottom 20 (mean ± std) ===")
     print(df_ms.tail(20).to_string(index=False))
 
-    # CSV 저장
-    out_csv = os.path.join(save_path, filename)
-    df_ms.to_csv(out_csv, index=False)
-    print(f"\nSaved: {out_csv}")
+
 
     # --- scalar reports (LOS) ---
     if scalar:
