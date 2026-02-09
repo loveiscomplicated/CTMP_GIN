@@ -57,16 +57,24 @@ def spearman_corr_torch(x: torch.Tensor, y: torch.Tensor) -> float:
     return float((rx * ry).mean().item())
 
 
-
 def stability_report(
     outs: List[torch.Tensor],
     ks: List[int] = [10, 20, 30],
 ) -> Dict[str, object]:
     """
-    outs: list of global_importance vectors [N] (CPU or GPU ok)
+    outs: list of importance vectors [N] (CPU or GPU ok)
+    NOTE: This function is for VECTORS only. (LOS scalar should be handled separately.)
     """
+    outs = [o.detach().cpu().view(-1) for o in outs]  # ✅ 항상 1D로
 
-    outs = [o.detach().cpu() for o in outs]
+    # --- guard: scalar 들어오면 바로 잡아내기 ---
+    bad = [(i, tuple(o.shape), int(o.numel())) for i, o in enumerate(outs) if o.numel() <= 1]
+    if bad:
+        raise ValueError(
+            f"stability_report expects vectors with numel>1, but got scalar/too-small entries: {bad}. "
+            "Move LOS scalars to stability_report_scalars()."
+        )
+
     m = len(outs)
 
     # --- safety: no pairwise comparison possible ---
@@ -79,22 +87,20 @@ def stability_report(
         }
 
     pair_spearman: List[Tuple[Tuple[int, int], float]] = []
-    pair_topk: Dict[int, List[Tuple[Tuple[int, int], float, float]]] = {
-        k: [] for k in ks
-    }
+    pair_topk: Dict[int, List[Tuple[Tuple[int, int], float, float]]] = {k: [] for k in ks}
 
     for i in range(m):
         for j in range(i + 1, m):
             sp = spearman_corr_torch(outs[i], outs[j])
             pair_spearman.append(((i, j), sp))
 
-            # vector length safety
-            N = min(len(outs[i]), len(outs[j]))
+            # ✅ 길이 안전: len() 금지(0-d 터짐) -> numel()
+            N = min(int(outs[i].numel()), int(outs[j].numel()))
 
             for k in ks:
-                effective_k = min(k, N)
+                effective_k = min(int(k), N)
 
-                if effective_k == 0:
+                if effective_k <= 0:
                     pair_topk[k].append(((i, j), 0.0, 0.0))
                     continue
 
@@ -106,8 +112,7 @@ def stability_report(
 
                 pair_topk[k].append(((i, j), ov, jac))
 
-    # averages
-    spearman_avg = sum(v for _, v in pair_spearman) / len(pair_spearman)
+    spearman_avg = sum(v for _, v in pair_spearman) / max(len(pair_spearman), 1)
 
     topk_avg = {}
     for k, lst in pair_topk.items():
@@ -116,10 +121,7 @@ def stability_report(
         else:
             overlap_avg = sum(v[1] for v in lst) / len(lst)
             jaccard_avg = sum(v[2] for v in lst) / len(lst)
-            topk_avg[k] = {
-                "overlap_avg": overlap_avg,
-                "jaccard_avg": jaccard_avg,
-            }
+            topk_avg[k] = {"overlap_avg": overlap_avg, "jaccard_avg": jaccard_avg}
 
     return {
         "pair_spearman": pair_spearman,
@@ -127,6 +129,7 @@ def stability_report(
         "pair_topk": pair_topk,
         "topk_avg": topk_avg,
     }
+
 
 
 def print_stability_report(report: Dict[str, object], ks: List[int] = [10, 20, 30]) -> None:
@@ -164,25 +167,45 @@ def ranks_descending(x: torch.Tensor) -> torch.Tensor:
 def topk_set(x: torch.Tensor, k: int) -> set:
     return set(torch.topk(x, k=k, largest=True).indices.detach().cpu().tolist())
 
-
 def unstable_variables_report(
     outs: List[torch.Tensor],
     k: int = 20,
 ) -> Dict[str, object]:
     """
     Identify stable/unstable variables across multiple seeds.
-
-    Definitions (for m seeds):
-    - Stable-in-topk: appears in Top-K for all seeds (freq == m)
-    - Unstable-in-topk: appears in Top-K for some seeds but not all (0 < freq < m)
-    - Outside-topk: appears in none (freq == 0)
-
-    Also computes rank variability for variables appearing in at least one Top-K.
+    VECTORS ONLY. Scalars (e.g. LOS) are not allowed.
     """
+
     outs = [o.detach().cpu().flatten() for o in outs]
+
+    if len(outs) == 0:
+        raise ValueError("outs is empty.")
+    
+    # --- guard: scalar protection ---
+    bad = [(i, tuple(o.shape), int(o.numel()))
+           for i, o in enumerate(outs)
+           if o.numel() <= 1]
+
+    if bad:
+        raise ValueError(
+            f"unstable_variables_report expects vectors with numel>1, "
+            f"but got scalar/too-small entries: {bad}. "
+            "Use stability_report_scalars for LOS."
+        )
+
     m = len(outs)
     N = outs[0].numel()
 
+    if any(o.numel() != N for o in outs):
+        raise ValueError("All outs must have the same vector length.")
+
+    # k safety
+    k = min(k, N)
+
+    if k <= 0:
+        # Top-k 자체가 의미 없으니 빈 결과 반환 or 에러(취향)
+        raise ValueError(f"k must be >=1 after clipping. Got k={k}, N={N}.")
+    
     # 1) Top-K membership frequency
     topk_sets = [topk_set(o, k) for o in outs]
     freq = torch.zeros(N, dtype=torch.long)
@@ -354,8 +377,40 @@ def importance_mean_std_table(
     df = df.sort_values("rank_mean").reset_index(drop=True)
     return df
 
+def stability_report_scalars(
+    vals: List[torch.Tensor],
+) -> Dict[str, object]:
+    """
+    vals: list of scalar tensors (e.g., LOS attribution per seed).
+    Returns mean/std/cv stability summary.
+    """
+    xs: List[float] = []
+    for i, v in enumerate(vals):
+        t = v.detach().cpu().view(-1)
+        if int(t.numel()) != 1:
+            raise ValueError(
+                f"stability_report_scalars expects scalars (numel==1). "
+                f"Got vals[{i}] shape={tuple(v.shape)}, numel={int(t.numel())}."
+            )
+        xs.append(float(t.item()))
 
-def report(df_ms, outs, col_names, save_path, filename):
+    if len(xs) == 0:
+        return {"values": [], "mean": 0.0, "std": 0.0, "cv": 0.0}
+
+    x = torch.tensor(xs, dtype=torch.float32)
+    mean = float(x.mean().item())
+    std = float(x.std(unbiased=False).item()) if x.numel() > 1 else 0.0
+    cv = float(std / (abs(mean) + 1e-12))
+    return {"values": xs, "mean": mean, "std": std, "cv": cv}
+
+
+def print_scalar_stability_report(rep: Dict[str, object], name: str = "LOS") -> None:
+    print(f"\n=== Scalar Stability Report: {name} ===")
+    print(f"values: {rep['values']}")
+    print(f"mean: {rep['mean']:.6f}  std: {rep['std']:.6f}  cv: {rep['cv']:.6f}")
+
+
+def report(df_ms, outs, col_names, save_path, filename, scalar=False):
     # 보기 편하게 top/bottom
     print("\n=== Top 20 (mean ± std) ===")
     print(df_ms.head(20).to_string(index=False))
@@ -368,12 +423,20 @@ def report(df_ms, outs, col_names, save_path, filename):
     df_ms.to_csv(out_csv, index=False)
     print(f"\nSaved: {out_csv}")
 
-    # get reports
-    report = stability_report(outs, ks=[10, 20, 30])
-    print_stability_report(report, ks=[10, 20, 30])
+    # --- scalar reports (LOS) ---
+    if scalar:
+        rep_los = stability_report_scalars(outs)
+        print_scalar_stability_report(rep_los, name=col_names[0])
+        return
+    
+    # --- vector reports (variables) ---
+    rep_vec = stability_report(outs, ks=[10, 20, 30])
+    print_stability_report(rep_vec, ks=[10, 20, 30])
 
     rep20 = unstable_variables_report(outs, k=20)
     print_unstable_report_with_names(rep20, col_names)
 
     rep30 = unstable_variables_report(outs, k=30)
     print_unstable_report_with_names(rep30, col_names)
+
+
