@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from src.utils.seed_set import set_seed
 from src.data_processing.splits import holdout_test_split_stratified, kfold_stratified, make_loaders
-from src.data_processing.tensor_dataset import TEDSTensorDataset
+from src.data_processing.tensor_dataset import TEDSTensorDataset, TEDSDatasetForGIN
 from src.models.factory import build_model, build_edge
 from src.trainers.base import run_train_loop
 from src.utils.experiment import (make_run_id, 
@@ -43,17 +43,30 @@ def run_kfold_experiment(cfg, root):
     device = device_set(cfg["device"])
 
     # 2) dataset 생성 + split 생성 (indices)
-    dataset = TEDSTensorDataset(
-        root=root,
-        binary=cfg["train"].get("binary", True),
-        ig_label=cfg["train"].get("ig_label", False),
-    )
+    # create dataset
+    if cfg["model"]["name"] == 'gin':
+        dataset = TEDSTensorDataset(
+            root=root,
+            binary=cfg["train"].get("binary", True),
+            ig_label=False, # we don't train models for IG in k-fold cv
+            remove_los=False # only diff is maintatin los in processed_df --> related to getting mi_dict
+        )
+    else:
+        dataset = TEDSTensorDataset(
+            root=root,
+            binary=cfg["train"].get("binary", True),
+            ig_label=False, # we don't train models for IG in k-fold cv
+            remove_los=True
+        )
 
     labels = np.array([dataset[i][1] for i in range(len(dataset))])
     cfg["model"]["params"]["col_info"] = dataset.col_info
     cfg["model"]["params"]["num_classes"] = dataset.num_classes
     cfg["model"]["params"]["device"] = str(device)
     num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+
+    if cfg["model"]["name"] == 'gin':
+        num_nodes = len(dataset.col_info[0]) + 1 # variables + LOS (except REASON)
 
     trainval_idx, test_idx = holdout_test_split_stratified(
         dataset=dataset,

@@ -277,7 +277,14 @@ def mi_edge_index_batched_for_a3tgcn(
         )
         return single
 
-def mi_edge_index_batched_for_gin(batch_size, num_nodes, mi_dict_all_variables, top_k=6, threshold=0.01, pruning_ratio=0.5, return_edge_attr=False, edge_attr_single=None):
+def mi_edge_index_batched_for_gin(batch_size, 
+                                  num_nodes, 
+                                  mi_dict_all_variables, 
+                                  top_k=6, 
+                                  threshold=0.01, 
+                                  pruning_ratio=0.5, 
+                                  return_edge_attr=False, 
+                                  edge_attr_single=None):
     batch_size_d = batch_size
 
     if return_edge_attr:

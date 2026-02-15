@@ -25,7 +25,7 @@ class TEDSTensorDataset(Dataset):
             (List of column indices at admission, list of column indices at discharge)
         LOS (pandas.Series): Length of Stay (LOS) information.
     """
-    def __init__(self, root:str, binary=True, ig_label=False):
+    def __init__(self, root:str, binary=True, ig_label=False, remove_los=True):
         """
         Constructor for the TEDSTensorDataset.
 
@@ -41,7 +41,7 @@ class TEDSTensorDataset(Dataset):
         super().__init__()
         self.binary = binary
         self.ig_label = ig_label
-
+        self.remove_los = remove_los
         self.root = root
         self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
         self.missing_corrected_path = os.path.join(self.root, 'raw', 'missing_corrected.csv')
@@ -102,7 +102,8 @@ class TEDSTensorDataset(Dataset):
         if 'LOS' in df.columns:
             LOS = df['LOS']
             LOS = df_to_tensor(LOS)
-            df = df.drop('LOS', axis=1)
+            if self.remove_los:
+                df = df.drop('LOS', axis=1)
         else:
             raise ValueError('No LOS variable in the raw data.')
         
@@ -192,14 +193,11 @@ class TEDSDatasetForGIN(Dataset):
         if self.binary:
             self.num_classes = len(df["REASONb"].unique())
             df = df.drop("REASONb", axis=1)
-            self.col_dims = get_col_dims(df)
         else:
             self.num_classes = len(df["REASON"].unique())
             df = df.drop("REASON", axis=1)
-            self.col_dims = get_col_dims(df)
+        self.col_info = get_col_info(df, ig_label=False)
         
-        
-
     def __getitem__(self, index):
         """
         Returns a single sample and its label corresponding to the given index.

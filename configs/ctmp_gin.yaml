@@ -36,7 +36,7 @@ train:
   early_stopping_patience: 10
   decision_threshold: 0.5
 
-  ig_label: True # include Neutral labels for Integrated Gradients Method
-
+  ig_label: False # include Neutral labels for Integrated Gradients Method
+                  # Must set to False except using Integrated Gradients
   cv: True
   n_folds: 5

@@ -34,6 +34,9 @@ def run_single_experiment(cfg, root):
     
     num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
 
+    if cfg["model"]["name"] == 'gin':
+        num_nodes = len(dataset.col_info[0]) + 1
+
     # create dataloaders
     split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
     train_loader, val_loader, test_loader, idx = train_test_split_stratified(dataset=dataset,  # type: ignore
