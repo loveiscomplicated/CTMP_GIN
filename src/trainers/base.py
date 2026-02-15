@@ -338,3 +338,15 @@ def run_train_loop(
             "test_f1": float(test_f1),
             "test_auc": float(test_auc),
         })
+
+    result_dict = {
+        "split": "test",
+        "test_loss": float(test_loss),
+        "test_acc": float(test_accuracy),
+        "test_precision": float(test_precision),
+        "test_recall": float(test_recall),
+        "test_f1": float(test_f1),
+        "test_auc": float(test_auc),
+    }
+
+    return result_dict
