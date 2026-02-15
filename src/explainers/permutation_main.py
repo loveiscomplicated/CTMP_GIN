@@ -46,7 +46,7 @@ except Exception:
 
 cur_dir = os.path.dirname(__file__)
 root = os.path.join(cur_dir, "..", "data")
-save_path = os.path.join(cur_dir, "results")
+save_path = os.path.join(cur_dir, "results", "permutation")
 os.makedirs(save_path, exist_ok=True)
 
 # --------@@@@ adjust model path !!! @@@@--------

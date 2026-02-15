@@ -112,7 +112,7 @@ def main():
                                                                                    )
     train_df = dataset.processed_df.iloc[idx[0]]
     num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
-
+    print(dataset.col_info[0])
     # build model
     model = build_model(
         model_name=cfg["model"]["name"],
@@ -177,11 +177,9 @@ def main():
         edge_index = edge_index.to(device) # type: ignore
 
         print("\n--------------------Interpreting Models with Integrated Gradients--------------------")
-        save_path = os.path.join(cur_dir, 'results', 'integrated_gradients')
+        save_path = os.path.join(cur_dir, 'results', 'integrated_gradients', 'full', 'val_dataset')
         if not os.path.exists(save_path):
             os.mkdir(save_path)
-
-        # save_path = os.path.join(save_path, 'temp')
         
         ig_main(
             dataset=dataset,
@@ -190,7 +188,26 @@ def main():
             save_path=save_path,
             edge_index=edge_index,
             target="logit",
-            n_steps=200,
+            n_steps=400,
+            reduce="mean",
+            keep_all=True,
+            max_batches=None,
+            verbose=True,
+            sample_ratio=1,
+        )
+
+        save_path = os.path.join(cur_dir, 'results', 'integrated_gradients', 'full', 'test_dataset')
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
+        
+        ig_main(
+            dataset=dataset,
+            dataloader=test_loader,
+            model=model,
+            save_path=save_path,
+            edge_index=edge_index,
+            target="logit",
+            n_steps=400,
             reduce="mean",
             keep_all=True,
             max_batches=None,

@@ -170,4 +170,6 @@ def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger, cf
         os.path.join(logger.run_dir, "xgboost.json")
     )
 
+    return metrics
+
 

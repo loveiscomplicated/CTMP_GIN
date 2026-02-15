@@ -8,6 +8,7 @@ sys.path.insert(0, str(project_root.parent))
 import yaml
 import argparse
 from src.trainers.run_single_experiment import run_single_experiment
+from src.trainers.cv import run_kfold_experiment
 
 cur_dir = os.path.dirname(__file__)
 root = os.path.join(cur_dir, 'data')
@@ -61,7 +62,7 @@ def main():
     cfg = override_cfg(cfg, args)
 
     if cfg["train"]["cv"]:
-        pass
+        run_kfold_experiment(cfg, root)
     else:
         run_single_experiment(cfg, root)
 

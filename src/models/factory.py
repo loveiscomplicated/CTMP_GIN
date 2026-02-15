@@ -1,7 +1,7 @@
 # models/factory.py
 import pandas
 import os
-from src.data_processing.mi_dict import search_mi_dict
+from src.data_processing.mi_dict import search_mi_dict, cv_mi_dict
 from src.data_processing.edge import fully_connected_edge_index_batched, mi_edge_index_batched, mi_edge_index_batched_for_a3tgcn, mi_edge_index_batched_for_gin
 from src.models.ctmp_gin import CTMPGIN
 from src.models.gin import GIN
@@ -28,14 +28,23 @@ def build_edge(model_name: str,
                train_df: pandas.DataFrame,
                num_nodes: int,
                batch_size: int,
+               edge_cached: bool = True,
                **kwargs):
     if not kwargs["is_mi_based"]:
         return fully_connected_edge_index_batched(num_nodes=num_nodes, batch_size=batch_size)
     
-    mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = search_mi_dict(root=root,
-                                seed=seed,
-                                train_df=train_df,
-                                n_neighbors=kwargs['n_neighbors'])
+    if edge_cached:
+        mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = search_mi_dict(root=root,
+                                    seed=seed,
+                                    train_df=train_df,
+                                    n_neighbors=kwargs['n_neighbors'])
+    else:
+        mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = cv_mi_dict(root=root,
+                            seed=seed,
+                            train_df=train_df,
+                            n_neighbors=kwargs['n_neighbors'])
+
+
     if model_name == "a3tgcn":
         edge_index = mi_edge_index_batched_for_a3tgcn(batch_size=batch_size, 
                                                         num_nodes=num_nodes, 

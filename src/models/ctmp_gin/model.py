@@ -12,7 +12,7 @@ par_dir = os.path.join(cur_dir, '..')
 sys.path.append(par_dir)
 
 from src.models.entity_embedding import EntityEmbeddingBatch3
-
+from src.utils.device_set import device_set
 
 '''class GatedFusion(nn.Module):
     def __init__(self, in_dim, out_dim, hidden_dim=None, dropout=0.0):
@@ -82,8 +82,7 @@ class CTMPGIN(nn.Module):
                  gate_hidden_ch=None,
                  **kwargs):
         super().__init__()
-        self.device = kwargs["device"]
-
+        self.device = device_set(kwargs["device"])
         self.dropout_p = dropout_p
 
         self.col_list, self.col_dims, self.ad_col_index, self.dis_col_index = col_info
