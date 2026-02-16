@@ -1,6 +1,7 @@
 import os
 import json
 import numpy as np
+import copy
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -83,7 +84,7 @@ def run_kfold_experiment(cfg, root):
         n_folds=K,
         seed=seed
     ):
-        fold_cfg = dict(cfg)
+        fold_cfg = copy.deepcopy(cfg)
         fold_cfg["fold"] = fold
 
         fold_dir = os.path.join(cv_dir, "folds", f"fold_{fold}")
