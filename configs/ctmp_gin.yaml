@@ -32,11 +32,15 @@ train:
   val_ratio: 0.15
   test_ratio: 0.15
   num_workers: 0
+  optimizer: "Adam"
+  weight_decay: 0
   lr_scheduler_patience: 5
   early_stopping_patience: 10
   decision_threshold: 0.5
 
   ig_label: False # include Neutral labels for Integrated Gradients Method
                   # Must set to False except using Integrated Gradients
-  cv: True
+  cv: False
   n_folds: 5
+  random_search: True
+  

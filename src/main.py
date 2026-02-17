@@ -8,7 +8,7 @@ sys.path.insert(0, str(project_root.parent))
 import yaml
 import argparse
 from src.trainers.run_single_experiment import run_single_experiment
-from src.trainers.cv import run_kfold_experiment
+from src.trainers.run_kfold_cv import run_kfold_experiment
 
 cur_dir = os.path.dirname(__file__)
 root = os.path.join(cur_dir, 'data')
@@ -61,10 +61,15 @@ def main():
     cfg = load_yaml(args.config)
     cfg = override_cfg(cfg, args)
 
+    if cfg["train"]["random_search"]:
+        ...
+
     if cfg["train"]["cv"]:
         run_kfold_experiment(cfg, root)
     else:
         run_single_experiment(cfg, root)
+
+    
 
 if __name__ == "__main__":
     main()

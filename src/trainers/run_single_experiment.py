@@ -84,8 +84,17 @@ def run_single_experiment(cfg, root):
         criterion = nn.BCEWithLogitsLoss()
     else:
         criterion = nn.CrossEntropyLoss()
+    
+    if cfg["train"].get("optimizer", "adam") == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(), 
+                                    lr=cfg["train"]["learning_rate"], 
+                                    weight_decay=cfg["train"].get("weight_decay", 0.0))
         
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["learning_rate"])
+    else:
+        optimizer = torch.optim.Adam(model.parameters(),
+                                      lr=cfg["train"]["learning_rate"], 
+                                      weight_decay=cfg["train"].get("weight_decay", 0.0))
+
     scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
     early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
 
