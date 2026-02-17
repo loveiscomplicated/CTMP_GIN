@@ -107,6 +107,8 @@ def run_kfold_experiment(cfg, root):
             drop_last=True
         )
 
+        print(len(train_loader))
+
         train_df = dataset.processed_df.iloc[train_idx]
 
         if cfg["model"]["name"] == "xgboost":
@@ -148,7 +150,16 @@ def run_kfold_experiment(cfg, root):
         else:
             criterion = nn.CrossEntropyLoss()
             
-        optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["learning_rate"])
+        if cfg["train"].get("optimizer", "adam") == "adamw":
+            optimizer = torch.optim.AdamW(model.parameters(), 
+                                        lr=cfg["train"]["learning_rate"], 
+                                        weight_decay=cfg["train"].get("weight_decay", 0.0))
+            
+        else: # if adam
+            optimizer = torch.optim.Adam(model.parameters(),
+                                        lr=cfg["train"]["learning_rate"], 
+                                        weight_decay=cfg["train"].get("weight_decay", 0.0))
+            
         scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
         early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
 
