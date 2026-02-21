@@ -6,10 +6,16 @@ tqdm
 requests
 
 # --- science / stats ---
-# scikit-learn
+scikit-learn
 
 # --- viz ---
 matplotlib
+
+# parameter tuning
+optuna
+
+# download raw_data
+gdown
 
 # --- interpretability ---
 captum
