@@ -160,7 +160,7 @@ def main():
         print("--------------------Interpreting Models with Graph Based Integrated Gradients FINISHED--------------------")
 
     if explain_method == "ig":
-        model_path = os.path.join(cur_dir, '..', '..', 'runs', 'IG_20260129-050325__ctmp_gin__bs=32__lr=1.00e-03__seed=42', 'checkpoints', 'best.pt')
+        model_path = os.path.join(cur_dir, '..', '..', 'runs', '20260221-072012__gin__bs=32__lr=1.00e-03__seed=1', 'checkpoints', 'best.pt')
 
         load_checkpoint(
             model=model,
