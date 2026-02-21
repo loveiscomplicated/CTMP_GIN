@@ -1,4 +1,5 @@
 import os
+import optuna
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -11,10 +12,18 @@ from src.utils.seed_set import set_seed
 from src.utils.device_set import device_set
 from src.trainers.utils.early_stopper import EarlyStopper
 
-def run_single_experiment(cfg, root):
-    run_id = make_run_id(cfg)
-    run_dir = ensure_run_dir("runs", run_id)
-    logger = ExperimentLogger(cfg, run_dir)
+def run_single_experiment(cfg, 
+                          root,
+                          **kwargs):
+    report_metric = kwargs.get("report_metric", "valid_auc")
+    trial = kwargs.get("trial", None)
+    edge_cached=kwargs.get("edge_cached", True)
+
+    logger = None
+    if trial is None: # if not parameter searching (normal training session)
+        run_id = make_run_id(cfg)
+        run_dir = ensure_run_dir("runs", run_id)
+        logger = ExperimentLogger(cfg, run_dir) # if parameter searching, turn off the logger
 
     seed = cfg["train"].get("seed", 42)
     set_seed(seed) 
@@ -36,6 +45,8 @@ def run_single_experiment(cfg, root):
 
     if cfg["model"]["name"] == 'gin':
         num_nodes = len(dataset.col_info[0]) + 1
+
+    print(f"num_nodes set to {num_nodes}")
 
     # create dataloaders
     split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
@@ -63,8 +74,7 @@ def run_single_experiment(cfg, root):
     )
     model = model.to(device)
     total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(model)
-    print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
+
 
     # build edge_index
     edge_index = build_edge(model_name=cfg["model"]["name"],
@@ -73,12 +83,15 @@ def run_single_experiment(cfg, root):
                             train_df=train_df,
                             num_nodes=num_nodes,
                             batch_size = cfg["train"]["batch_size"],
+                            edge_cached=edge_cached,
                             **cfg.get("edge", {})
                             )
     edge_index = edge_index.to(device) # type: ignore
-
-    print(f'edge index: \n{edge_index}')
-    print(f'edge index shape: \n{edge_index.shape}')
+    if trial is None:
+        print(model)
+        print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
+        print(f'edge index: \n{edge_index}')
+        print(f'edge index shape: \n{edge_index.shape}')
 
     if cfg["train"]["binary"]:
         criterion = nn.BCEWithLogitsLoss()
@@ -98,7 +111,7 @@ def run_single_experiment(cfg, root):
     scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
     early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
 
-    run_train_loop(
+    out = run_train_loop(
         model=model,
         edge_index=edge_index,
         binary=cfg["train"]["binary"],
@@ -113,4 +126,8 @@ def run_single_experiment(cfg, root):
         logger=logger,
         epochs=cfg["train"]["epochs"],
         decision_threshold=cfg["train"]["decision_threshold"],
+        trial=trial,
+        report_metric=report_metric,
     )
+
+    return out

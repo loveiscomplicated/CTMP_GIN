@@ -25,7 +25,7 @@ model:
 train:
   batch_size: 32
   learning_rate: 0.001 # optimizer learning rate
-  epochs: 100
+  epochs: 20 # 원래 100
   seed: 1
   binary: True
   train_ratio: 0.7
@@ -35,7 +35,7 @@ train:
   optimizer: "Adam"
   weight_decay: 0
   lr_scheduler_patience: 5
-  early_stopping_patience: 10
+  early_stopping_patience: 4 # 원래 10
   decision_threshold: 0.5
 
   ig_label: False # include Neutral labels for Integrated Gradients Method

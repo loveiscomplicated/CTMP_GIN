@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import optuna
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
@@ -197,10 +198,16 @@ def run_train_loop(
     binary,
     logger=None,
     start_epoch: int = 1,
+    trial=None,              # [ADD] optuna trial (optional)
+    report_metric="valid_auc",# [ADD] objective metric
     **kwargs
 ):
     EPOCHS = kwargs["epochs"]
     decision_threshold = kwargs["decision_threshold"]
+
+    best_val = -float("inf")
+    best_epoch = None
+    best_val_metrics = None
 
     last_epoch = start_epoch - 1  # 루프가 0번 돌 때 대비
 
@@ -229,6 +236,24 @@ def run_train_loop(
             "valid_auc": float(val_auc),
         }
 
+        # [ADD] best val 추적 (objective용)
+        cur_obj = float(metrics[report_metric])  # 예: valid_auc
+        if cur_obj > best_val:
+            best_val = cur_obj
+            best_epoch = epoch
+            best_val_metrics = dict(metrics)
+
+        # [ADD] Optuna report + prune
+        if trial is not None:
+            # epoch 단위 step으로 report
+            trial.report(cur_obj, step=epoch)
+            if trial.should_prune():
+                # pruning 시 logger가 있으면 마지막 상태 기록 정도는 가능(선택)
+                raise optuna.TrialPruned(
+                    f"Pruned at epoch={epoch}, cur_{report_metric}={cur_obj:.6f}, best_{report_metric}={best_val:.6f}"
+                )
+
+
         if logger is not None:
             logger.log_metrics(epoch, metrics)
             logger.maybe_save_checkpoint(
@@ -246,7 +271,7 @@ def run_train_loop(
         print(f"  [Train] LR: {current_lr:.6f} | Loss: {train_loss:.4f}")
         print(f"  [Valid] Loss: {val_loss:.4f} | Acc: {val_accuracy:.4f}, Prec: {val_precision:.4f}, Rec: {val_recall:.4f}, F1: {val_f1:.4f}, AUC: {val_auc:.4f}")
 
-        should_stop = early_stopper(val_loss)
+        should_stop = early_stopper(-val_auc)
         if should_stop:
             print("\n--- Early Stopping activated. Learning terminated. ---")
             break
@@ -271,8 +296,10 @@ def run_train_loop(
             "test_auc": float(test_auc),
         })
 
-    result_dict = {
-        "split": "test",
+    return {
+        "best_epoch": int(best_epoch) if best_epoch is not None else None,
+        "best_valid_metric": float(best_val),
+        "best_valid_metrics": best_val_metrics,  # dict or None
         "test_loss": float(test_loss),
         "test_acc": float(test_accuracy),
         "test_precision": float(test_precision),
@@ -280,5 +307,3 @@ def run_train_loop(
         "test_f1": float(test_f1),
         "test_auc": float(test_auc),
     }
-
-    return result_dict

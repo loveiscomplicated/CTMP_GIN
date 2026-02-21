@@ -172,6 +172,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
 
 def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
     """
+    calculate mi_dict every time.
     Args:
         root (str): Root directory for MI cache.
         seed (int): Random seed.

@@ -112,6 +112,9 @@ def main():
                                                                                    )
     train_df = dataset.processed_df.iloc[idx[0]]
     num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+    if cfg["model"]["name"] == 'gin':
+        num_nodes = len(dataset.col_info[0]) + 1
+
     print(dataset.col_info[0])
     # build model
     model = build_model(

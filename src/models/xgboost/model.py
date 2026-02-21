@@ -147,7 +147,7 @@ def _train_xgboost_multi(train_idx: list, val_idx: list, test_idx: list, df: pd.
     return final_xgb_model, X_train, y_test, y_pred, y_pred_proba, le
 
 
-def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger, cfg):
+def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger | None, cfg):
     if cfg["train"]["binary"]:
         final_xgb_model, X_train, y_test, y_pred, y_pred_proba = _train_xgboost_binary(
             train_idx, val_idx, test_idx, df, cfg
@@ -161,14 +161,15 @@ def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger, cf
 
         y_pred_label = le.inverse_transform(y_pred)
         print("Pred label examples:", y_pred_label[:10])
+    
+    if logger:
+        logger.log_metrics(epoch=0, metrics={"split": "test", **metrics})
+        get_feature_importance(X_train, final_xgb_model, save_dir=logger.run_dir)
 
-    logger.log_metrics(epoch=0, metrics={"split": "test", **metrics})
-    get_feature_importance(X_train, final_xgb_model, save_dir=logger.run_dir)
-
-    # model save
-    final_xgb_model.get_booster().save_model(
-        os.path.join(logger.run_dir, "xgboost.json")
-    )
+        # model save
+        final_xgb_model.get_booster().save_model(
+            os.path.join(logger.run_dir, "xgboost.json")
+        )
 
     return metrics
 

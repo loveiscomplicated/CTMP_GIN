@@ -169,6 +169,8 @@ class CTMPGIN(nn.Module):
             nn.Dropout(self.dropout_p),
             nn.Linear(self.fuse_dim * 2, 1)
             )
+        
+        self.reset_parameters()   # Apply He init.
 
     def forward(self, x, los, edge_index, **kwargs):
         batch_size = x.shape[0]
@@ -364,6 +366,28 @@ class CTMPGIN(nn.Module):
         fused, w, logits = self.gated_fusion(ad_f, dis_f, merged_f)
         logit = self.classifier_b(fused)
         return logit
+    
+    def reset_parameters(self):
+        # 1) Linear: He(Kaiming) init
+        def _init(m):
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+            # 2) LayerNorm: 기본값으로 명시(선택)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+
+        self.apply(_init)
+
+        # 3) (선택) Embedding류는 별도 초기화가 필요하면 여기서 처리
+        # EntityEmbeddingBatch3 내부가 nn.Embedding을 쓰면,
+        # 아래처럼 작은 normal로 초기화하는 걸 추천.
+        for m in self.modules():
+            if isinstance(m, nn.Embedding):
+                nn.init.normal_(m.weight, mean=0.0, std=0.02)
 
 
 class CtmpGIN_return_emb(nn.Module):

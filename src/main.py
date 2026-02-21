@@ -61,9 +61,7 @@ def main():
     cfg = load_yaml(args.config)
     cfg = override_cfg(cfg, args)
 
-    if cfg["train"]["random_search"]:
-        ...
-
+    
     if cfg["train"]["cv"]:
         run_kfold_experiment(cfg, root)
     else:

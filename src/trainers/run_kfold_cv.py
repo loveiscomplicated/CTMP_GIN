@@ -163,7 +163,7 @@ def run_kfold_experiment(cfg, root):
         scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
         early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
 
-        run_train_loop(
+        results = run_train_loop(
             model=model,
             edge_index=edge_index,
             binary=cfg["train"]["binary"],
@@ -180,7 +180,9 @@ def run_kfold_experiment(cfg, root):
             decision_threshold=cfg["train"]["decision_threshold"],
         )
 
-        fold_results.append({"fold": fold, "run_dir": fold_dir})
+        results["fold"] = fold
+        results["run_dir"] = fold_dir
+        fold_results.append(results)
 
     # 3) CV 요약 저장
     summary = {
