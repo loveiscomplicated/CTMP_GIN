@@ -380,6 +380,360 @@ def explain_ig_for_dataset(
 
     return res # abs: share (ratio) 
 
+def manual_ig_embeddings_gin(
+    model,
+    x_idx,
+    los_idx,
+    edge_index,
+    target="logit",
+    n_steps=50,
+    return_full=False,
+):
+    """
+    GIN용 Integrated Gradients.
+    GIN은 x와 los를 concat해서 단일 entity_embedding_layer로 임베딩한다.
+    따라서 x_idx: [B, num_x_vars], los_idx: [B] → concat → [B, num_x_vars+1]
+    로 처리하고 전체 임베딩에 대해 IG를 계산한다.
+    마지막 컬럼(num_x_vars 인덱스)이 LOS에 해당한다.
+    """
+    assert target == "logit"
+    eps = 1e-12
+
+    model.eval()
+    device = next(model.parameters()).device
+
+    x_idx = x_idx.to(device).long()
+    los_idx = los_idx.to(device).long()
+    edge_index = edge_index.to(device)
+
+    B = x_idx.size(0)
+
+    # GIN forward에서 los를 unsqueeze(1)하고 cat하는 방식 그대로 재현
+    los_idx_2d = los_idx.unsqueeze(dim=1)                     # [B, 1]
+    full_idx = torch.cat((x_idx, los_idx_2d), dim=1)          # [B, num_vars+1]
+
+    base_full_idx = torch.zeros_like(full_idx)                 # baseline = 0
+
+    # embeddings
+    x_emb = model.entity_embedding_layer(full_idx)            # [B, num_vars+1, emb_dim]
+    base_x_emb = model.entity_embedding_layer(base_full_idx)  # [B, num_vars+1, emb_dim]
+    dx = x_emb - base_x_emb                                   # [B, num_vars+1, emb_dim]
+
+    # forward_from_full_emb: GIN 고유 forward (embedding 이후)
+    def _forward_from_emb(x_embedded):
+        # x_embedded: [B, num_vars+1, emb_dim]
+        num_nodes = x_embedded.size(1)
+        batch_size = x_embedded.size(0)
+        node_emb = x_embedded.reshape(batch_size * num_nodes, -1)
+        sum_pooled = []
+        for layer in model.gin_layers:
+            node_emb = layer(node_emb, edge_index)
+            x_temp = node_emb.reshape(batch_size, num_nodes, -1)
+            x_sum = torch.sum(x_temp, dim=1)
+            sum_pooled.append(x_sum)
+        graph_emb = torch.cat(sum_pooled, dim=1)
+        return model.classifier(graph_emb).squeeze(-1)
+
+    # accumulate gradients
+    total_grad = torch.zeros_like(x_emb)  # [B, num_vars+1, emb_dim]
+
+    for s in range(1, n_steps + 1):
+        alpha = s / n_steps
+        x_s = (base_x_emb + alpha * dx).detach().requires_grad_(True)
+
+        out = _forward_from_emb(x_s)
+
+        grad, = torch.autograd.grad(
+            out.sum(),
+            x_s,
+            retain_graph=False,
+            create_graph=False,
+        )
+        total_grad += grad
+
+    avg_grad = total_grad / n_steps                   # [B, num_vars+1, emb_dim]
+    ig = dx * avg_grad                                # [B, num_vars+1, emb_dim]
+
+    # reduce: abs & signed per node
+    imp_abs = ig.abs().sum(dim=-1)                    # [B, num_vars+1]
+    imp_signed = ig.sum(dim=-1)                       # [B, num_vars+1]
+
+    # split: last column is LOS
+    imp_abs_x = imp_abs[:, :-1]                       # [B, num_x_vars]
+    imp_abs_los = imp_abs[:, -1]                      # [B]
+    imp_signed_x = imp_signed[:, :-1]                 # [B, num_x_vars]
+    imp_signed_los = imp_signed[:, -1]                # [B]
+
+    # delta (completeness check)
+    with torch.no_grad():
+        fx = _forward_from_emb(x_emb)
+        f0 = _forward_from_emb(base_x_emb)
+        ig_scalar = imp_signed_x.sum(dim=1) + imp_signed_los
+        delta = (fx - f0) - ig_scalar
+        delta_ratio = torch.abs(delta) / (torch.abs(fx - f0) + eps)
+
+    out_dict = {
+        "imp_abs_x": imp_abs_x,
+        "imp_signed_x": imp_signed_x,
+        "imp_abs_los": imp_abs_los,
+        "imp_signed_los": imp_signed_los,
+        "delta": delta,
+        "delta_ratio": delta_ratio,
+    }
+
+    if return_full:
+        out_dict["ig"] = ig
+
+    return out_dict
+
+
+def explain_ig_for_dataset_gin(
+    dataloader,
+    model,
+    edge_index: torch.Tensor,
+    target: str = "logit",
+    n_steps: int = 50,
+    reduce="mean",
+    keep_all: bool = False,
+    max_batches=None,
+    verbose: bool = True,
+    sample_ratio: float = 1.0,
+    seed: int = 0,
+):
+    """GIN 전용 explain_ig_for_dataset."""
+    from tqdm import tqdm
+    from src.explainers.utils import _iter_selected_batches
+
+    model.eval()
+
+    if not (0.0 < sample_ratio <= 1.0):
+        raise ValueError("sample_ratio must be in (0, 1].")
+
+    scores_abs_x = []
+    scores_abs_los = []
+    scores_signed_x = []
+    scores_signed_los = []
+    scores_delta = []
+    scores_delta_ratio = []
+
+    running_sum_abs_x = None
+    running_sum_abs_los = None
+    running_sum_signed_x = None
+    running_sum_signed_los = None
+    running_sum_delta = None
+    running_sum_delta_ratio = None
+
+    n_seen = 0
+
+    total_batches = len(dataloader)
+    effective_batches = min(total_batches, max_batches) if max_batches is not None else total_batches
+
+    if sample_ratio < 1.0:
+        g = torch.Generator().manual_seed(seed)
+        n_pick = max(1, int(round(effective_batches * sample_ratio)))
+        perm = torch.randperm(effective_batches, generator=g).tolist()
+        selected = sorted(perm[:n_pick])
+        if verbose:
+            print(f"[GIN-IG] Sampling {n_pick}/{effective_batches} batches (ratio={sample_ratio}, seed={seed})")
+    else:
+        selected = list(range(effective_batches))
+
+    iterator = _iter_selected_batches(dataloader, selected)
+    pbar = tqdm(iterator, total=len(selected), desc="GIN-IG (dataset)")
+
+    eps = 1e-12
+
+    for b_idx, batch in pbar:
+        x_idx, y_idx, los_idx = batch
+
+        res = manual_ig_embeddings_gin(
+            model=model,
+            x_idx=x_idx,
+            los_idx=los_idx,
+            edge_index=edge_index,
+            target=target,
+            n_steps=n_steps,
+        )
+
+        imp_abs_x = res["imp_abs_x"]
+        imp_abs_los = res["imp_abs_los"]
+        imp_signed_x = res["imp_signed_x"]
+        imp_signed_los = res["imp_signed_los"]
+        delta = res["delta"]
+        delta_ratio = res["delta_ratio"]
+
+        total_abs = imp_abs_x.sum(dim=1) + imp_abs_los + eps
+        share_x = imp_abs_x / total_abs.unsqueeze(1)
+        share_los = imp_abs_los / total_abs
+
+        B = share_x.size(0)
+        n_seen += B
+
+        if reduce == "mean" and not keep_all:
+            if running_sum_abs_x is None:
+                running_sum_abs_x = share_x.detach().sum(dim=0)
+                running_sum_abs_los = share_los.detach().sum(dim=0)
+                running_sum_signed_x = imp_signed_x.detach().sum(dim=0)
+                running_sum_signed_los = imp_signed_los.detach().sum(dim=0)
+                running_sum_delta = delta.detach().sum(dim=0)
+                running_sum_delta_ratio = delta_ratio.detach().sum(dim=0)
+            else:
+                running_sum_abs_x += share_x.detach().sum(dim=0)
+                running_sum_abs_los += share_los.detach().sum(dim=0)
+                running_sum_signed_x += imp_signed_x.detach().sum(dim=0)
+                running_sum_signed_los += imp_signed_los.detach().sum(dim=0)
+                running_sum_delta += delta.detach().sum(dim=0)
+                running_sum_delta_ratio += delta_ratio.detach().sum(dim=0)
+        else:
+            scores_abs_x.append(share_x.detach().cpu())
+            scores_abs_los.append(share_los.detach().cpu())
+            scores_signed_x.append(imp_signed_x.detach().cpu())
+            scores_signed_los.append(imp_signed_los.detach().cpu())
+            scores_delta.append(delta.detach().cpu())
+            scores_delta_ratio.append(delta_ratio.detach().cpu())
+
+    if n_seen == 0:
+        raise RuntimeError("No samples processed.")
+
+    if reduce == "mean" and not keep_all:
+        if running_sum_abs_x is None:
+            raise RuntimeError("No samples processed.")
+        return {
+            "global_abs_x": (running_sum_abs_x / float(n_seen)).cpu(),
+            "global_abs_los": (running_sum_abs_los / float(n_seen)).cpu(),
+            "global_signed_x": (running_sum_signed_x / float(n_seen)).cpu(),
+            "global_signed_los": (running_sum_signed_los / float(n_seen)).cpu(),
+            "global_delta": (running_sum_delta / float(n_seen)).cpu(),
+            "global_delta_ratio": (running_sum_delta_ratio / float(n_seen)).cpu(),
+        }
+
+    if len(scores_abs_x) == 0:
+        raise RuntimeError("No scores collected.")
+
+    all_abs_x = torch.cat(scores_abs_x, dim=0)
+    all_abs_los = torch.cat(scores_abs_los, dim=0)
+    all_signed_x = torch.cat(scores_signed_x, dim=0)
+    all_signed_los = torch.cat(scores_signed_los, dim=0)
+    all_delta = torch.cat(scores_delta, dim=0)
+    all_delta_ratio = torch.cat(scores_delta_ratio, dim=0)
+
+    def _reduce(t):
+        if reduce == "mean":
+            return t.mean(dim=0)
+        elif reduce == "median":
+            return t.median(dim=0).values
+        raise ValueError(reduce)
+
+    def _make_stat_dict(_all_scores):
+        return {
+            "mean": _all_scores.mean().item(),
+            "median": _all_scores.median().item(),
+            "p90": torch.quantile(_all_scores, 0.90).item(),
+            "p95": torch.quantile(_all_scores, 0.95).item(),
+            "p99": torch.quantile(_all_scores, 0.99).item(),
+            "max": _all_scores.max().item(),
+        }
+
+    return {
+        "global_abs_x": _reduce(all_abs_x),
+        "global_abs_los": _reduce(all_abs_los),
+        "global_signed_x": _reduce(all_signed_x),
+        "global_signed_los": _reduce(all_signed_los),
+        "global_delta": _reduce(all_delta),
+        "global_delta_ratio": _reduce(all_delta_ratio),
+        "los_abs_stats": _make_stat_dict(all_abs_los.float()),
+        "delta_stats": _make_stat_dict(all_delta.float()),
+        "delta_ratio_stats": _make_stat_dict(all_delta_ratio.float()),
+    }
+
+
+def gin_ig_main(
+    dataset,
+    dataloader,
+    model,
+    save_path: str,
+    edge_index: torch.Tensor,
+    target: str = "logit",
+    n_steps: int = 400,
+    reduce="mean",
+    keep_all: bool = False,
+    max_batches=None,
+    verbose: bool = True,
+    sample_ratio: float = 1.0,
+):
+    """GIN 전용 ig_main. explainer_main.py에서 호출."""
+    from src.utils.seed_set import set_seed
+    from src.explainers.stablity_report import importance_mean_std_table, report
+
+    outs_abs_x = []
+    outs_abs_los = []
+    outs_signed_x = []
+    outs_signed_los = []
+    outs_delta = []
+    outs_delta_ratio = []
+    los_abs_stats_list = []
+    delta_stats_list = []
+    delta_ratio_stats_list = []
+
+    for s in [0, 1, 2]:
+        set_seed(s)
+        res = explain_ig_for_dataset_gin(
+            dataloader=dataloader,
+            model=model,
+            edge_index=edge_index,
+            target=target,
+            n_steps=n_steps,
+            reduce=reduce,
+            keep_all=keep_all,
+            max_batches=max_batches,
+            verbose=verbose,
+            sample_ratio=sample_ratio,
+            seed=s,
+        )
+
+        outs_abs_x.append(res["global_abs_x"].cpu().float())
+        outs_abs_los.append(res["global_abs_los"].cpu().float())
+        outs_signed_x.append(res["global_signed_x"].cpu().float())
+        outs_signed_los.append(res["global_signed_los"].cpu().float())
+        outs_delta.append(res["global_delta"].cpu().float())
+        outs_delta_ratio.append(res["global_delta_ratio"].cpu().float())
+        los_abs_stats_list.append(res.get("los_abs_stats", None))
+        delta_stats_list.append(res.get("delta_stats", None))
+        delta_ratio_stats_list.append(res.get("delta_ratio_stats", None))
+
+        if sample_ratio == 1:
+            break
+
+    col_names = dataset.col_info[0]  # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+
+    df_abs_x = importance_mean_std_table(outs_abs_x, col_names, save_path, f"GIN_IG_abs_x_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_abs_los = importance_mean_std_table(outs_abs_los, ["LOS"], save_path, f"GIN_IG_abs_los_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_signed_x = importance_mean_std_table(outs_signed_x, col_names, save_path, f"GIN_IG_signed_x_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_signed_los = importance_mean_std_table(outs_signed_los, ["LOS"], save_path, f"GIN_IG_signed_los_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_delta = importance_mean_std_table(outs_delta, ["delta"], save_path, f"GIN_IG_delta_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+    df_delta_ratio = importance_mean_std_table(outs_delta_ratio, ["delta_ratio"], save_path, f"GIN_IG_delta_ratio_{reduce}_step{n_steps}_{sample_ratio}_global_importance.csv")
+
+    report(df_abs_x, outs_abs_x, col_names)
+    report(df_abs_los, outs_abs_los, ["LOS"], scalar=True)
+    report(df_signed_x, outs_signed_x, col_names)
+    report(df_signed_los, outs_signed_los, ["LOS"], scalar=True)
+    report(df_delta, outs_delta, ["delta"], scalar=True)
+    report(df_delta_ratio, outs_delta_ratio, ["delta_ratio"], scalar=True)
+
+    if keep_all:
+        def _print_stats(name, stats_list):
+            if stats_list[0] is None:
+                return
+            for seed, stats in enumerate(stats_list):
+                print(f"\n[{name} distribution](seed: {seed})")
+                for k, v in stats.items():
+                    print(f"  {k:>6}: {v:.6f}")
+
+        _print_stats("LOS_abs", los_abs_stats_list)
+        _print_stats("delta", delta_stats_list)
+        _print_stats("delta_ratio", delta_ratio_stats_list)
+
+
 from src.utils.seed_set import set_seed
 from src.explainers.stablity_report import (
     importance_mean_std_table,

@@ -20,7 +20,7 @@ from src.utils.device_set import device_set
 from src.trainers.utils.early_stopper import EarlyStopper
 
 from src.explainers.gb_ig_main import gb_ig_main
-from src.explainers.integrated_gradients import ig_main
+from src.explainers.integrated_gradients import ig_main, gin_ig_main
 
 cur_dir = os.path.dirname(__file__)
 root = os.path.join(cur_dir, '..', 'data')
@@ -218,6 +218,50 @@ def main():
             sample_ratio=1,
         )
         print("--------------------Interpreting Models with Integrated Gradients FINISHED--------------------")
+
+    if explain_method == "gin_ig":
+        model_path = os.path.join(cur_dir, '..', '..', 'runs', '20260221-072012__gin__bs=32__lr=1.00e-03__seed=1', 'checkpoints', 'best.pt')
+
+        load_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            filename=model_path,
+            map_location=device,
+        )
+        edge_index = build_edge(model_name=cfg["model"]["name"],
+                            root=root,
+                            seed=seed,
+                            train_df=train_df,
+                            num_nodes=num_nodes,
+                            batch_size=cfg["train"]["batch_size"],
+                            **cfg.get("edge", {})
+                            )
+        edge_index = edge_index.to(device) # type: ignore
+
+        print("\n--------------------Interpreting GIN with Integrated Gradients--------------------")
+
+        for split_name, loader in [("train", train_loader), ("val", val_loader), ("test", test_loader)]:
+            split_save_path = os.path.join(cur_dir, 'results', 'integrated_gradients', 'gin', f'{split_name}_dataset')
+            if not os.path.exists(split_save_path):
+                os.makedirs(split_save_path, exist_ok=True)
+
+            gin_ig_main(
+                dataset=dataset,
+                dataloader=loader,
+                model=model,
+                save_path=split_save_path,
+                edge_index=edge_index,
+                target="logit",
+                n_steps=400,
+                reduce="mean",
+                keep_all=True,
+                max_batches=None,
+                verbose=True,
+                sample_ratio=1,
+            )
+
+        print("--------------------Interpreting GIN with Integrated Gradients FINISHED--------------------")
 
 if __name__ == "__main__":
     main()
