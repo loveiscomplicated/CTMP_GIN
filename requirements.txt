@@ -1,0 +1,15 @@
+# --- core ---
+numpy
+pandas
+pyyaml
+tqdm
+requests
+
+# --- science / stats ---
+# scikit-learn
+
+# --- viz ---
+matplotlib
+
+# --- interpretability ---
+captum
