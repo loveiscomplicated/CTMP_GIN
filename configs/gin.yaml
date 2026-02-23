@@ -7,6 +7,7 @@ edge:
   threshold: 0.01
   pruning_ratio: 0.5
   return_edge_attr: False # CAUTION: potential error when set to True
+  edge_cached: False
 
 model:
   name: gin
@@ -19,7 +20,7 @@ model:
 train:
   batch_size: 32
   learning_rate: 0.001 # optimizer learning rate
-  epochs: 100
+  epochs: 20
   seed: 1
   binary: True
   train_ratio: 0.7
@@ -29,6 +30,8 @@ train:
   lr_scheduler_patience: 10
   early_stopping_patience: 15
   decision_threshold: 0.5
+  optimizer: "adamw"
+  weight_decay: 0.0003
   cv: False
   n_folds: 5
-  ig_label: True
+  ig_label: False

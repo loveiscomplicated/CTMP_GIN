@@ -80,6 +80,7 @@ class CTMPGIN(nn.Module):
                  max_los=37,
                  train_eps=True, 
                  gate_hidden_ch=None,
+                 remove_proj_ad_dis=False,
                  **kwargs):
         super().__init__()
         self.device = device_set(kwargs["device"])
@@ -154,6 +155,12 @@ class CTMPGIN(nn.Module):
 
         self.proj_ad = nn.Linear(gin_hidden_channel, d)
         self.proj_dis = nn.Linear(gin_hidden_channel, d)
+
+        if remove_proj_ad_dis:
+            print("proj_ad_dis removed...")
+            self.proj_ad = nn.Identity()
+            self.proj_dis = nn.Identity()
+            
         self.proj_merged = nn.Linear(gin_hidden_channel_2, d)
 
         self.gated_fusion = GatedFusion(

@@ -17,7 +17,7 @@ def run_single_experiment(cfg,
                           **kwargs):
     report_metric = kwargs.get("report_metric", "valid_auc")
     trial = kwargs.get("trial", None)
-    edge_cached=kwargs.get("edge_cached", True)
+    edge_cached=kwargs["edge"].get("edge_cached", True)
 
     logger = None
     if trial is None: # if not parameter searching (normal training session)

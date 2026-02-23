@@ -7,6 +7,7 @@ edge:
   threshold: 0.01
   pruning_ratio: 0.7
   return_edge_attr: False # CAUTION: potential error when set to True
+  edge_cached: True
 
 model:
   name: ctmp_gin
@@ -21,6 +22,7 @@ model:
     los_embedding_dim: 8
     gate_hidden_ch: 64 # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
     dropout_p: 0.2557
+    remove_proj_ad_dis: True
 
 train:
   batch_size: 128
