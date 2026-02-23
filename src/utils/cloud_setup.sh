@@ -3,16 +3,7 @@
 set -e  # 에러 발생 시 즉시 종료
 
 echo "===== RunPod setup start ====="
-cd /workspace
-
-# --------------------------------------------------
-# repo clone
-# --------------------------------------------------
-if [ ! -d "CTMP_GIN" ]; then
-    git clone https://github.com/loveiscomplicated/CTMP_GIN.git
-fi
-
-cd CTMP_GIN
+git checkout runpod
 
 # --------------------------------------------------
 # install miniconda 
