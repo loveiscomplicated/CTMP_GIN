@@ -25,9 +25,12 @@ def make_run_id(cfg: Dict[str, Any]) -> str:
     """
     Example:
     20260112-174200__ctmp_gin__bs=512__lr=5e-4__seed=42
+
+    run_name 키가 config에 있으면 model.name 대신 사용한다.
+    병렬 실험처럼 model.name이 동일한 경우 run_name으로 구분한다.
     """
     ts = _now_run_id()
-    model = cfg.get("model", {}).get("name", "model")
+    model = cfg.get("run_name") or cfg.get("model", {}).get("name", "model")
 
     train = cfg.get("train", {})
     bs = train.get("batch_size", "NA")

@@ -1,3 +1,5 @@
+run_name: ctmp_gin_remove_proj
+
 device: null # if null, it automatically sets the available device. (cuda | mps | cpu)
 
 edge:
