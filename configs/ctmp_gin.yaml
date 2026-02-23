@@ -21,13 +21,15 @@ model:
     train_eps: True
     los_embedding_dim: 8
     gate_hidden_ch: 64 # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
-    dropout_p: 0.2557
-    remove_proj_ad_dis: True
+    dropout_p: 0.25
+    remove_proj_ad_dis: False
+    remove_all_proj: True
+    remove_gated_fusion: True
 
 train:
   batch_size: 128
   learning_rate: 0.0006 # optimizer learning rate
-  epochs: 20 # 원래 100
+  epochs: 100 # 원래 100
   seed: 1
   binary: True
   train_ratio: 0.7

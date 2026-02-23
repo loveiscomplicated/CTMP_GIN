@@ -81,6 +81,8 @@ class CTMPGIN(nn.Module):
                  train_eps=True, 
                  gate_hidden_ch=None,
                  remove_proj_ad_dis=False,
+                 remove_all_proj=False,
+                 remove_gated_fusion=False,
                  **kwargs):
         super().__init__()
         self.device = device_set(kwargs["device"])
@@ -155,20 +157,31 @@ class CTMPGIN(nn.Module):
 
         self.proj_ad = nn.Linear(gin_hidden_channel, d)
         self.proj_dis = nn.Linear(gin_hidden_channel, d)
+        self.proj_merged = nn.Linear(gin_hidden_channel_2, d)
 
         if remove_proj_ad_dis:
             print("proj_ad_dis removed...")
             self.proj_ad = nn.Identity()
             self.proj_dis = nn.Identity()
-            
-        self.proj_merged = nn.Linear(gin_hidden_channel_2, d)
-
-        self.gated_fusion = GatedFusion(
-            in_dim=3*self.fuse_dim,
-            out_dim=self.fuse_dim,
-            hidden_dim=gate_hidden_ch,
-            dropout=dropout_p
-        )
+            self.proj_merged = nn.Linear(gin_hidden_channel_2, d)
+        
+        if remove_all_proj:
+            print("proj_ad_dis_merged removed...")
+            self.proj_ad = nn.Identity()
+            self.proj_dis = nn.Identity()
+            self.proj_merged = nn.Identity()
+        
+        self.remove_gated_fusion = remove_gated_fusion
+        if not self.remove_gated_fusion:
+            print("gated_fusion removed...")
+            self.gated_fusion = GatedFusion(
+                in_dim=3*self.fuse_dim,
+                out_dim=self.fuse_dim,
+                hidden_dim=gate_hidden_ch,
+                dropout=dropout_p
+            )
+        else:
+            self.gated_fusion = None
 
         self.classifier_b = nn.Sequential(
             nn.Linear(self.fuse_dim, self.fuse_dim * 2),
@@ -223,9 +236,12 @@ class CTMPGIN(nn.Module):
         ad_f = self.proj_ad(ad_emb)          # [B, d]
         dis_f = self.proj_dis(dis_emb)       # [B, d]
 
-        fused, w, logits = self.gated_fusion(ad_f, dis_f, merged_f)
-        logit = self.classifier_b(fused)
+        if self.remove_gated_fusion:
+            fused = (ad_f + dis_f + merged_f) / 3.0
+        else:
+            fused, w, logits = self.gated_fusion(ad_f, dis_f, merged_f)
 
+        logit = self.classifier_b(fused)
         return logit
 
     def get_new_edge(self, edge_index, los, batch_size):
