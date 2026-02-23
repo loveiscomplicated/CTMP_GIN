@@ -17,7 +17,7 @@ def run_single_experiment(cfg,
                           **kwargs):
     report_metric = kwargs.get("report_metric", "valid_auc")
     trial = kwargs.get("trial", None)
-    edge_cached=cfg["edge"].get("edge_cached", True)
+    # edge_cached=kwargs.get("edge_cached", True)
 
     logger = None
     if trial is None: # if not parameter searching (normal training session)
@@ -83,7 +83,7 @@ def run_single_experiment(cfg,
                             train_df=train_df,
                             num_nodes=num_nodes,
                             batch_size = cfg["train"]["batch_size"],
-                            edge_cached=edge_cached,
+                            # edge_cached=edge_cached,
                             **cfg.get("edge", {})
                             )
     edge_index = edge_index.to(device) # type: ignore
