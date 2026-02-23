@@ -6,7 +6,18 @@ RUNS_DIR="/workspace/CTMP_GIN/runs"
 
 cd "$REPO_DIR"
 
-source "$HOME/miniconda3/etc/profile.d/conda.sh"
+# --------------------------------------------------
+# conda 초기화
+# --------------------------------------------------
+if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+elif [ -f "/opt/conda/etc/profile.d/conda.sh" ]; then
+    source "/opt/conda/etc/profile.d/conda.sh"
+else
+    echo "ERROR: conda not found"
+    exit 1
+fi
+
 conda activate pyg_2
 
 # 어떤 이유로든 스크립트가 종료될 때 pod는 반드시 멈추도록

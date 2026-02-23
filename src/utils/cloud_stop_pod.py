@@ -15,8 +15,11 @@ def main():
 
     payload = {
         "query": """
-        mutation StopPod($podId: ID!) {
-          stopPod(input: { podId: $podId })
+        mutation StopPod($podId: String!) {
+          podStop(input: { podId: $podId }) {
+            id
+            desiredStatus
+          }
         }
         """,
         "variables": {"podId": pod_id},
@@ -39,6 +42,7 @@ def main():
         sys.exit(4)
 
     print("Pod stop requested successfully.")
+    print("Response:", data.get("data", {}).get("podStop", {}))
 
 
 if __name__ == "__main__":
