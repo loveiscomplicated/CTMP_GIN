@@ -20,3 +20,6 @@ gdown
 
 # --- interpretability ---
 captum
+
+# database
+wandb
