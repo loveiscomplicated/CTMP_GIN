@@ -11,20 +11,20 @@ def send_dischord_message(message: str):
 
     # 웹훅 URL이 설정되었는지 확인
     if not webhook_url:
-        print("오류: DISCORD_WEBHOOK_URL 환경 변수가 설정되지 않았습니다.")
+        print("Error: DISCORD_WEBHOOK_URL environment variable is not set.")
         exit(1)
 
     # 2. 보낼 데이터 설정
     data = {
         "content": message,
-        "username": "파이썬 봇"  # 선택 사항: 봇 이름 변경
+        "username": "PYTHON BOT"  # name of bot
     }
 
-    # 3. POST 요청 보내기
+    # 3. send POST request
     response = requests.post(webhook_url, json=data)
 
     # 4. 결과 확인
     if response.status_code == 204:
-        print("메시지 전송 성공!")
+        print("Message Send succeed!")
     else:
-        print(f"전송 실패: {response.status_code}")
+        print(f"FAILED Sending: {response.status_code}")

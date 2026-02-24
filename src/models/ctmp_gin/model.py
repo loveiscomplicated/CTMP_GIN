@@ -173,7 +173,6 @@ class CTMPGIN(nn.Module):
         
         self.remove_gated_fusion = remove_gated_fusion
         if not self.remove_gated_fusion:
-            print("gated_fusion removed...")
             self.gated_fusion = GatedFusion(
                 in_dim=3*self.fuse_dim,
                 out_dim=self.fuse_dim,
@@ -181,6 +180,7 @@ class CTMPGIN(nn.Module):
                 dropout=dropout_p
             )
         else:
+            print("gated_fusion removed...")
             self.gated_fusion = None
 
         self.classifier_b = nn.Sequential(
