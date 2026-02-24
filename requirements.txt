@@ -4,6 +4,7 @@ pandas
 pyyaml
 tqdm
 requests
+dotenv
 
 # --- science / stats ---
 scikit-learn
