@@ -133,8 +133,20 @@ source "$CONDA_SH"
 # ----------------------------------
 # Accept Anaconda ToS (non-interactive fix)
 # ----------------------------------
-conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
-conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
+# conda 함수 초기화 (tmux/non-interactive에서 중요)
+conda activate base || true
+
+# conda가 실제로 어디 걸리는지 로그로 확인
+echo "[$(ts)] conda: $(command -v conda)"
+conda --version
+
+# ToS accept (base에 확실히 기록)
+conda tos accept --yes --override-channels --channel https://repo.anaconda.com/pkgs/main || true
+conda tos accept --yes --override-channels --channel https://repo.anaconda.com/pkgs/r || true
+
+# (선택) defaults 채널을 명시적으로 써서 override mismatch 방지
+conda config --set channels defaults || true
+conda config --set channel_priority flexible || true
 
 if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   echo "[$(ts)] conda env $ENV_NAME exists -> skip create"
