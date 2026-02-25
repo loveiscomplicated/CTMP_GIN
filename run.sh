@@ -130,6 +130,12 @@ fi
 
 source "$CONDA_SH"
 
+# ----------------------------------
+# Accept Anaconda ToS (non-interactive fix)
+# ----------------------------------
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
+
 if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   echo "[$(ts)] conda env $ENV_NAME exists -> skip create"
 else
