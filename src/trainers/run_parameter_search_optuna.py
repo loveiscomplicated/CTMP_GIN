@@ -151,7 +151,10 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
 
             try:
                 out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=False)
-                score = float(out["best_valid_metric"])
+                if model_name == "xgboost":
+                    score = float(out["roc_auc"])
+                else:
+                    score = float(out["best_valid_metric"])
 
                 if (score is None) or (not np.isfinite(score)):
                     raise optuna.TrialPruned()
