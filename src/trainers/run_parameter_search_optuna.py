@@ -8,6 +8,118 @@ import numpy as np
 
 from src.trainers.run_single_experiment import run_single_experiment  # 네 경로에 맞게 수정
 
+def suggest_ctmp_gin_params(trial, cfg):
+    cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
+    cfg["model"]["params"]["los_embedding_dim"] = trial.suggest_categorical("los_embedding_dim", [4, 8, 16])
+
+    gin_hidden = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["gin_hidden_channel"] = gin_hidden
+    cfg["model"]["params"]["gin_hidden_channel_2"] = gin_hidden
+
+    cfg["model"]["params"]["gin_1_layers"] = trial.suggest_int("gin_1_layers", 1, 3)
+    cfg["model"]["params"]["gin_2_layers"] = trial.suggest_int("gin_2_layers", 1, 3)
+
+    cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
+    cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
+    cfg["model"]["params"]["gate_hidden_ch"] = trial.suggest_categorical("gate_hidden_ch", [None, 64, 128, 256])
+
+    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
+    cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
+    cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
+    cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
+
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
+    cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
+    cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
+    cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
+    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+
+def suggest_gin_params(trial, cfg):
+    cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
+    cfg["model"]["params"]["gin_dim"] = trial.suggest_categorical("gin_dim", [16, 32, 64, 96])
+
+    cfg["model"]["params"]["gin_layer_num"] = trial.suggest_int("gin_layer_num", 1, 6)
+
+    cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
+
+    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
+    cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
+    cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
+    cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
+
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
+    cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
+    cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
+    cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
+    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+
+def suggest_a3tgcn_params(trial, cfg):
+    cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
+    cfg["model"]["params"]["hidden_channel"] = trial.suggest_categorical("hidden_channel", [16, 32, 64, 96])
+
+    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
+    cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
+    cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
+    cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
+
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
+    cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
+    cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
+    cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
+    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+
+def suggest_gin_gru_params(trial, cfg):
+    cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
+
+    cfg["model"]["params"]["gin_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["gin_layers"] = trial.suggest_int("gin_layers", 1, 6)
+    cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
+    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
+
+    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
+    cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
+    cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
+    cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
+   
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
+    cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
+    cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
+    cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
+    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+
+def suggest_xgboost_params(trial, cfg):
+    cfg["train"]["n_estimators"] = trial.suggest_int("n_estimators", 800, 8000, step=200)
+    cfg["train"]["max_depth"] = trial.suggest_int("max_depth", 3, 12)
+    cfg["train"]["min_child_weight"] = trial.suggest_int("min_child_weight", 1, 20)
+    
+    cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-3, 0.2, log=True)
+    cfg["train"]["gamma"] = trial.suggest_float("gamma", 0.0, 5.0)
+    
+    cfg["train"]["subsample"] = trial.suggest_float("subsample", 0.6, 1.0)
+    cfg["train"]["colsample_bytree"] = trial.suggest_float("colsample_bytree", 0.6, 1.0)
+    cfg["train"]["colsample_bylevel"] = trial.suggest_float("colsample_bylevel", 0.6, 1.0)
+    cfg["train"]["colsample_bynode"] = trial.suggest_float("colsample_bynode", 0.6, 1.0)
+    
+    cfg["train"]["reg_alpha"] = trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True)
+    cfg["train"]["reg_lambda"] = trial.suggest_float("reg_lambda", 1e-8, 50.0, log=True)
+
+    cfg["train"]["max_leaves"] = trial.suggest_int("max_leaves", 0, 256, step=16)  # 0이면 비활성
+    if cfg["train"]["max_leaves"] == 0:
+        cfg["train"].pop("max_leaves", None)
+
+PARAM_SUGGESTORS = {
+    "ctmp_gin": suggest_ctmp_gin_params,
+    "gin": suggest_gin_params,
+    "a3tgcn": suggest_a3tgcn_params,
+    "gin_gru": suggest_gin_gru_params,
+    "xgboost": suggest_xgboost_params
+}
+
 def load_cfg(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -25,59 +137,13 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
             torch.backends.cudnn.benchmark = False
 
         cfg = copy.deepcopy(base_cfg)
+        model_name = cfg["model"]["name"]
 
-        if cfg["model"]["name"] == "ctmp_gin":
-            # ---- suggest hyperparams ----
-            cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
-            cfg["model"]["params"]["los_embedding_dim"] = trial.suggest_categorical("los_embedding_dim", [4, 8, 16])
-
-            gin_hidden = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
-            cfg["model"]["params"]["gin_hidden_channel"] = gin_hidden
-            cfg["model"]["params"]["gin_hidden_channel_2"] = gin_hidden
-
-            cfg["model"]["params"]["gin_1_layers"] = trial.suggest_int("gin_1_layers", 1, 3)
-            cfg["model"]["params"]["gin_2_layers"] = trial.suggest_int("gin_2_layers", 1, 3)
-
-            cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
-            cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
-            cfg["model"]["params"]["gate_hidden_ch"] = trial.suggest_categorical("gate_hidden_ch", [None, 64, 128, 256])
-
-            cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
-            cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
-            cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
-            cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
-
-            cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
-            cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
-            cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
-            cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
-            cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
-            cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
-
-        elif cfg["model"]["name"] == "gin":
-            # ---- suggest hyperparams ----
-            cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
-            cfg["model"]["params"]["gin_dim"] = trial.suggest_categorical("gin_dim", [16, 32, 64, 96])
-
-            cfg["model"]["params"]["gin_layer_num"] = trial.suggest_int("gin_layer_num", 1, 6)
-
-            cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
-
-            cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
-            cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
-            cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
-            cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
-
-            cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
-            cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
-            cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
-            cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
-            cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
-            cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
-            ...
+        if model_name in PARAM_SUGGESTORS:
+            PARAM_SUGGESTORS[model_name](trial, cfg)
         else:
-            raise ValueError("no matching model name (ctmp_gin or gin)")
-        
+            raise ValueError(f"No suggestor registered for model: {model_name}")
+
         scores = []
         for seed in objective_seeds:
             cfg_s = copy.deepcopy(cfg)
@@ -102,7 +168,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
     return objective
 
 
-def run_optuna(config_path: str, root: str, n_trials: int = 50):
+def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20):
 
     os.makedirs("runs", exist_ok=True)
 
@@ -115,7 +181,7 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50):
     # pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5)
     pruner = optuna.pruners.HyperbandPruner(
         min_resource=5,
-        max_resource=base_cfg["train"]["epochs"],
+        max_resource=epochs,
         reduction_factor=3
     ) # aggressive pruning
 
@@ -150,10 +216,10 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50):
 if __name__ == "__main__":
     cur_dir = os.path.dirname(__file__)
     
-    config_path = os.path.join(cur_dir, '..', '..', 'configs', 'gin.yaml')
+    config_path = os.path.join(cur_dir, '..', '..', 'configs', 'xgboost.yaml')
     root = os.path.join(cur_dir, '..', 'data')
     
     config_path = os.path.abspath(config_path)
     root = os.path.abspath(root)
 
-    run_optuna(config_path=config_path, root=root, n_trials=50)
+    run_optuna(config_path=config_path, root=root, n_trials=50, epochs=20)

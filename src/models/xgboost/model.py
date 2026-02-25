@@ -88,8 +88,17 @@ def _train_xgboost_binary(train_idx: list, val_idx: list, test_idx: list, df: pd
         n_estimators=cfg["train"]["n_estimators"],
         learning_rate=cfg["train"]["learning_rate"],
         max_depth=cfg["train"]["max_depth"],
+
+        min_child_weight=cfg["train"].get("min_child_weight", 1),
+        gamma=cfg["train"].get("gamma", 0),
+        subsample=cfg["train"].get("subsample", 1.0),
+        colsample_bytree=cfg["train"].get("colsample_bytree", 1.0),
+        reg_alpha=cfg["train"].get("reg_alpha", 0),
+        reg_lambda=cfg["train"].get("reg_lambda", 1),
         eval_metric=cfg["train"]["eval_metric"],
-        random_state=cfg["train"]["seed"]
+
+        random_state=cfg["train"]["seed"],
+        early_stopping_rounds=50
     )
 
     if cfg["train"]["do_cross_validation"]:
@@ -130,7 +139,16 @@ def _train_xgboost_multi(train_idx: list, val_idx: list, test_idx: list, df: pd.
         n_estimators=cfg["train"]["n_estimators"],
         learning_rate=cfg["train"]["learning_rate"],
         max_depth=cfg["train"]["max_depth"],
+
+        min_child_weight=cfg["train"].get("min_child_weight", 1),
+        gamma=cfg["train"].get("gamma", 0),
+        subsample=cfg["train"].get("subsample", 1.0),
+        colsample_bytree=cfg["train"].get("colsample_bytree", 1.0),
+        reg_alpha=cfg["train"].get("reg_alpha", 0),
+        reg_lambda=cfg["train"].get("reg_lambda", 1),
+
         random_state=cfg["train"]["seed"],
+        early_stopping_rounds=50
     )
 
     if cfg["train"]["do_cross_validation"]:
@@ -138,14 +156,13 @@ def _train_xgboost_multi(train_idx: list, val_idx: list, test_idx: list, df: pd.
     else:
         final_xgb_model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=1)
 
-    y_pred_proba = final_xgb_model.predict_proba(X_test)
+    y_pred_proba = final_xgb_model.predict_proba(X_test)[:, 1]
     y_pred = final_xgb_model.predict(X_test)   # 평가용(정수)
 
     # For human-readable purposes
     # y_pred_label = le.inverse_transform(y_pred)
 
     return final_xgb_model, X_train, y_test, y_pred, y_pred_proba, le
-
 
 def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger | None, cfg):
     if cfg["train"]["binary"]:

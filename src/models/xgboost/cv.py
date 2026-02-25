@@ -21,16 +21,13 @@ def _build_scorer(binary: bool, metric: str = "auto"):
     """
     if metric == "auto":
         if binary:
-            # ROC-AUC는 확률/score 기반이라 needs_proba=False로도 되지만,
-            # 우리는 predict_proba를 명확히 쓰도록 한다.
-            return make_scorer(roc_auc_score, needs_proba=True)
-        # multiclass는 ROC-AUC가 해석/안정성 측면에서 애매해서 기본은 logloss로
+            return make_scorer(roc_auc_score, response_method='predict_proba')
         return "neg_log_loss"
 
     if metric == "roc_auc":
         if not binary:
             raise ValueError("roc_auc metric is recommended for binary only.")
-        return make_scorer(roc_auc_score, needs_proba=True)
+        return make_scorer(roc_auc_score, response_method='predict_proba')
 
     if metric == "f1_macro":
         # predict 결과 기반

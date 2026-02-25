@@ -2,12 +2,13 @@ device: null # if null, it automatically sets the available device. (cuda | mps 
 
 edge:
   is_mi_based: True # if 0, it generates fully connected edge index.
-  n_neighbors: 5 # NOTE: cv result of n_neighbors: 3
+  n_neighbors: 5 
   top_k: 9
   threshold: 0.01
   pruning_ratio: 0.7
   return_edge_attr: False # CAUTION: potential error when set to True
   edge_cached: True
+  cache_path: "./src/data/mi/ctmp_gin_mi_dict_1.pickle"
 
 model:
   name: ctmp_gin
@@ -21,10 +22,7 @@ model:
     train_eps: True
     los_embedding_dim: 8
     gate_hidden_ch: 64 # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
-    dropout_p: 0.2557712293821196	
-    remove_proj_ad_dis: False
-    remove_all_proj: True
-    remove_gated_fusion: True
+    dropout_p: 0.2557712293821196
 
 train:
   batch_size: 128
