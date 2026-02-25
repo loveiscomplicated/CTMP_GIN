@@ -2,7 +2,7 @@ import requests
 import os
 from dotenv import load_dotenv
 
-def send_dischord_message(message: str):
+def send_discord_message(message: str, bot_name: str = "Python Bot"):
     # .env 파일에서 환경 변수 로드
     load_dotenv()
 
@@ -17,7 +17,7 @@ def send_dischord_message(message: str):
     # 2. 보낼 데이터 설정
     data = {
         "content": message,
-        "username": "PYTHON BOT"  # name of bot
+        "username": bot_name  # name of bot
     }
 
     # 3. send POST request
@@ -28,3 +28,8 @@ def send_dischord_message(message: str):
         print("Message Send succeed!")
     else:
         print(f"FAILED Sending: {response.status_code}")
+
+if __name__ == "__main__":
+    import sys
+    msg = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Hello from RunPod"
+    send_discord_message(msg, bot_name="RunPod Bot")
