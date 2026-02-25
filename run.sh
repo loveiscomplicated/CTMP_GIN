@@ -234,6 +234,10 @@ PIPELINE="${PIPELINE//__SEND_MESSAGE_PY__/${SEND_MESSAGE_PY}}"
 # -----------------------
 # tmux session: create and start
 # -----------------------
+# Ensure tmux exists BEFORE using it
+apt update
+apt install -y tmux
+
 if tmux has-session -t "${MODEL_NAME}" 2>/dev/null; then
   echo "[$(ts)] tmux session exists: ${MODEL_NAME}"
 else
@@ -241,8 +245,12 @@ else
   tmux new-session -d -s "${MODEL_NAME}"
 fi
 
+PIPE_PATH="/tmp/${MODEL_NAME}__pipeline.sh"
+printf "%s" "$PIPELINE" > "$PIPE_PATH"
+chmod +x "$PIPE_PATH"
+
 # Run pipeline in that tmux session
-tmux send-keys -t "${MODEL_NAME}" "bash -lc '$(printf "%q" "$PIPELINE")'" C-m
+tmux send-keys -t "${MODEL_NAME}" "bash $PIPE_PATH" C-m
 
 echo "[$(ts)] started in tmux session '${MODEL_NAME}'."
 echo "Attach with: tmux attach -t ${MODEL_NAME}"
