@@ -33,7 +33,7 @@ train:
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
-  num_workers: 0
+  num_workers: 4
   optimizer: "adamw"
   weight_decay: 0.00027052923508629883
   lr_scheduler_patience: 5
