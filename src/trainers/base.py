@@ -8,7 +8,7 @@ from pathlib import Path
 import torch.nn.functional as F
 from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
 
-from src.utils.send_message import send_dischord_message
+from src.utils.send_message import send_discord_message
 
 project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root.parent))
@@ -287,7 +287,7 @@ def run_train_loop(
 
     result_str = f"\n[Test] Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}"
     print(result_str)
-    send_dischord_message(result_str)
+    send_discord_message(result_str)
 
     if logger is not None:
         logger.log_metrics(last_epoch, {
