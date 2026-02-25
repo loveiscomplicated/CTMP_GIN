@@ -37,7 +37,9 @@ def build_edge(model_name: str,
         mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = search_mi_dict(root=root,
                                     seed=seed,
                                     train_df=train_df,
-                                    n_neighbors=kwargs['n_neighbors'])
+                                    n_neighbors=kwargs['n_neighbors'],
+                                    cache_path=kwargs['cache_path']
+                                    )
     else:
         mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = cv_mi_dict(root=root,
                             seed=seed,

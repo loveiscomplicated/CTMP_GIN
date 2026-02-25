@@ -140,7 +140,7 @@ def seperate_ad_dis(mi_dict: dict, ad_col_list, dis_col_list):
     return mi_ad_dict, mi_dis_dict, mi_avg_dict
 
 
-def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
+def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, cache_path: str | None = None):
     """
     Load cached MI results or compute them, then split by admission/discharge.
 
@@ -148,22 +148,38 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
         root (str): Root directory for MI cache.
         seed (int): Random seed.
         train_df (pd.DataFrame): Training DataFrame.
-        n_neighbors (int): Number of neighbors for MI estimation. # NOTE: cv result of n_neighbors: 3
+        n_neighbors (int): Number of neighbors for MI estimation. 
+        cache_path (None or str): if set to str, it searches the selected path priorly. 
+                                  if None, it automatically searches by its seed.
 
     Returns:
         tuple: (mi_ad_dict, mi_dis_dict, mi_avg_dict)
     """
-    print("Buliding Mutual Information based edge index")
-    mi_dict_path = os.path.join(root, 'mi', f'mi_dict_{seed}.pickle')
-    
-    if os.path.exists(mi_dict_path):
-        print("Loading Cached file...")
-        with open(mi_dict_path, 'rb') as f:
-            mi_dict = pickle.load(f)
+    print("Buliding Edge Index Based on Mutual Information")
+    mi_dict = None
+
+    # 1. Prioritize loading from the user-specified path (cache_path)
+    if cache_path is not None:
+        try:
+            print("Loading cached file...")
+            with open(cache_path, 'rb') as f:
+                mi_dict = pickle.load(f)
+        except Exception as e:
+            print(f"FAILED: {e}. Moving to default search...")
+            print("Searching cached file by its seed...")
+
+    # 2. If loading failed or cache_path was not provided, check the default path (seed-based)
+    if mi_dict is None:
+        mi_dict_path = os.path.join(root, 'mi', f'mi_dict_{seed}.pickle')
         
-    else:
-        print("Calculating MI...")
-        mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors) 
+        if os.path.exists(mi_dict_path):
+            print("Loading cached file...")
+            with open(mi_dict_path, 'rb') as f:
+                mi_dict = pickle.load(f)
+            
+        else:
+            print("Calculating MI...")
+            mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors) 
 
     ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=True)
     mi_ad_dict, mi_dis_dict, mi_avg_dict = seperate_ad_dis(mi_dict=mi_dict, ad_col_list=ad_col_list, dis_col_list=dis_col_list)
