@@ -141,8 +141,16 @@ echo "[$(ts)] conda: $(command -v conda)"
 conda --version
 
 # ToS accept (base에 확실히 기록)
-conda tos accept --yes --override-channels --channel https://repo.anaconda.com/pkgs/main || true
-conda tos accept --yes --override-channels --channel https://repo.anaconda.com/pkgs/r || true
+# conda 함수 초기화
+conda activate base || true
+
+# conda 경로 확인(진짜 실행 파일도 같이 보이게)
+echo "[$(ts)] conda: $(type -a conda | head -n 2)"
+conda --version
+
+# ToS accept (에러 메시지에 나온 그대로)
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
 
 # (선택) defaults 채널을 명시적으로 써서 override mismatch 방지
 conda config --set channels defaults || true
