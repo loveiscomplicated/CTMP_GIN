@@ -191,7 +191,7 @@ def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger | N
             os.path.join(logger.run_dir, "xgboost.json")
         )
     
-    send_discord_message(message=result_str, )
+    send_discord_message(message=result_str, bot_name='xgboost_training_bot')
 
     return metrics
 

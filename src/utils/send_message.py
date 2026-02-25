@@ -1,10 +1,15 @@
 import requests
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 def send_discord_message(message: str, bot_name: str = "Python Bot"):
-    # .env 파일에서 환경 변수 로드
-    load_dotenv()
+    # 현재 실행 중인 파이썬 파일의 부모 디렉토리를 찾습니다.
+    cur_dir = os.path.dirname(__file__)
+    env_path = os.path.join(cur_dir, '..', '..', '.env')
+
+    # 해당 경로의 파일을 명시적으로 로드합니다.
+    load_dotenv(dotenv_path=env_path, override=True)
 
     # 환경 변수에서 웹훅 URL 가져오기
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
@@ -28,6 +33,7 @@ def send_discord_message(message: str, bot_name: str = "Python Bot"):
         print("Message Send succeed!")
     else:
         print(f"FAILED Sending: {response.status_code}")
+        print(f"Response Body: {response.text}") # This will tell you EXACTLY what Discord didn't like
 
 if __name__ == "__main__":
     import sys
