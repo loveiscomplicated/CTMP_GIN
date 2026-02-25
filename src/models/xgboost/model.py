@@ -12,7 +12,7 @@ from sklearn.metrics import make_scorer, roc_auc_score, f1_score
 from scipy.stats import uniform, randint
 from src.utils.experiment import ExperimentLogger
 from src.models.xgboost.cv import cross_validate
-
+from src.utils.send_message import send_discord_message
 
 def get_scores(y_test, y_pred, y_pred_proba, binary=True):
     metrics = {}
@@ -170,11 +170,14 @@ def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger | N
             train_idx, val_idx, test_idx, df, cfg
         )
         metrics = get_scores(y_test, y_pred, y_pred_proba, binary=True)
+        result_str = f"\n[Test] Loss: {metrics["logloss"]:.4f} | Acc: {metrics["accuracy"]:.4f}, Prec: {metrics["precision"]:.4f}, Rec: {metrics["recall"]:.4f}, F1: {metrics["f1"]:.4f}, AUC: {metrics["roc_auc"]:.4f}"
+
     else:
         final_xgb_model, X_train, y_test, y_pred, y_pred_proba, le = _train_xgboost_multi(
             train_idx, val_idx, test_idx, df, cfg
         )
         metrics = get_scores(y_test, y_pred, y_pred_proba, binary=False)
+        result_str = f"\n[Test] Loss: {metrics["logloss"]:.4f} | Acc: {metrics["accuracy"]:.4f}, Prec: {metrics["precision_macro"]:.4f}, Rec: {metrics["recall_macro"]:.4f}, F1: {metrics["f1_macro"]:.4f}"
 
         y_pred_label = le.inverse_transform(y_pred)
         print("Pred label examples:", y_pred_label[:10])
@@ -187,6 +190,8 @@ def train_xgboost(train_idx, val_idx, test_idx, df, logger: ExperimentLogger | N
         final_xgb_model.get_booster().save_model(
             os.path.join(logger.run_dir, "xgboost.json")
         )
+    
+    send_discord_message(message=result_str, )
 
     return metrics
 
