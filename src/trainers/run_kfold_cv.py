@@ -137,7 +137,6 @@ def run_kfold_experiment(cfg, root):
                                 train_df=train_df,
                                 num_nodes=num_nodes,
                                 batch_size = cfg["train"]["batch_size"],
-                                edge_cached=False,
                                 **cfg.get("edge", {})
                                 )
         edge_index = edge_index.to(device) # type: ignore
