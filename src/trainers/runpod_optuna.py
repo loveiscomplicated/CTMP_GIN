@@ -5,10 +5,20 @@ import yaml
 import random
 import torch
 import numpy as np
+import argparse
 
 from src.trainers.run_single_experiment import run_single_experiment  
 from scripts.request_mi import request_mi
 
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--config", type=str, required=True) # config file location
+    return p.parse_args()
+
+def load_yaml(path: str) -> dict:
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+    
 def suggest_ctmp_gin_params(trial, cfg):
     cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
     cfg["model"]["params"]["los_embedding_dim"] = trial.suggest_categorical("los_embedding_dim", [4, 8, 16])
@@ -179,15 +189,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
     return objective
 
 
-def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20):
-
-    os.makedirs("runs", exist_ok=True)
-
-    config_path = os.path.abspath(config_path)
-    root = os.path.abspath(root)
-
-    base_cfg = load_cfg(config_path)
-
+def run_optuna(base_cfg, root: str, n_trials: int = 50, epochs: int = 20):
     sampler = optuna.samplers.TPESampler(seed=42, multivariate=True)
     # pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5)
     pruner = optuna.pruners.HyperbandPruner(
@@ -226,11 +228,12 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
 
 if __name__ == "__main__":
     cur_dir = os.path.dirname(__file__)
-    
-    config_path = os.path.join(cur_dir, '..', '..', 'configs', 'xgboost.yaml')
     root = os.path.join(cur_dir, '..', 'data')
-    
-    config_path = os.path.abspath(config_path)
     root = os.path.abspath(root)
+    
+    args = parse_args()
+    base_cfg = load_yaml(args.config)
+    run_optuna(base_cfg=base_cfg, root=root, n_trials=50, epochs=20)
 
-    run_optuna(config_path=config_path, root=root, n_trials=50, epochs=20)
+
+    
