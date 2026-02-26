@@ -20,7 +20,19 @@ REQUESTS_DIR = f"{REMOTE_BASE}/requests"
 RESPONSES_DIR = f"{REMOTE_BASE}/responses"
 DONE_DIR = f"{REMOTE_BASE}/done"
 
+# [ADD] 실패 파일 보관 폴더
+FAILED_DIR = f"{REMOTE_BASE}/failed"
+# (선택) 처리중 폴더(동시 워커 대비)
+PROCESSING_DIR = f"{REMOTE_BASE}/processing"
+
 os.makedirs(LOCAL_CACHE, exist_ok=True)
+
+# [ADD] retry 설정
+MAX_RETRIES = 3
+RETRY_SLEEP = 2  # seconds
+
+def rclone_mkdir(remote_dir: str):
+    subprocess.run(["rclone", "mkdir", remote_dir], check=True)
 
 def rclone_copy(src, dst):
     subprocess.run(["rclone", "copyto", src, dst], check=True)
@@ -56,110 +68,139 @@ def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
     return mi_dict
 
 
-# -------------------------
-# 실제 train 데이터 로드 함수
-# -------------------------
 def load_train_df(mode, fold, seed, cfg):
     cur_dir = os.path.dirname(__file__)
     root = os.path.join(cur_dir, '..', 'src', 'data')
 
     if mode == "single":
         dataset = TEDSTensorDataset(
-                root=root,
-                binary=cfg["train"].get("binary", True),
-                ig_label=cfg["train"].get("ig_label", False),
-            )
+            root=root,
+            binary=cfg["train"].get("binary", True),
+            ig_label=cfg["train"].get("ig_label", False),
+        )
 
         cfg["model"]["params"]["col_info"] = dataset.col_info
         cfg["model"]["params"]["num_classes"] = dataset.num_classes
         device = device_set(cfg["device"])
-
         cfg["model"]["params"]["device"] = device
-        
-        num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
 
+        num_nodes = len(dataset.col_info[2])
         if cfg["model"]["name"] == 'gin':
             num_nodes = len(dataset.col_info[0]) + 1
-
         print(f"num_nodes set to {num_nodes}")
 
-        # create dataloaders
         split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
-        train_loader, val_loader, test_loader, idx = train_test_split_stratified(dataset=dataset,  # type: ignore
-                                                                                    batch_size=cfg['train']['batch_size'],
-                                                                                    ratio=split_ratio,
-                                                                                    seed=seed,
-                                                                                    num_workers=cfg['train']['num_workers'],
-                                                                                    )
+        train_loader, val_loader, test_loader, idx = train_test_split_stratified(
+            dataset=dataset,  # type: ignore
+            batch_size=cfg['train']['batch_size'],
+            ratio=split_ratio,
+            seed=seed,
+            num_workers=cfg['train']['num_workers'],
+        )
         train_df = dataset.processed_df.iloc[idx[0]]
         return train_df
 
     elif mode == "cv":
         raise KeyError("not implemented yet")
 
-# -------------------------
-# 메인 루프
-# -------------------------
+
+def process_one_request_file(fname: str):
+    """
+    한 request 파일을 처리.
+    실패하면 예외를 던져서 상위 retry 로직이 처리하게 함.
+    """
+    remote_request = f"{REQUESTS_DIR}/{fname}"
+
+    # (선택) 먼저 processing으로 옮겨서 "잡은 파일" 표시 (동시 워커 대비)
+    remote_processing = f"{PROCESSING_DIR}/{fname}"
+    try:
+        rclone_move(remote_request, remote_processing)
+        remote_request_in_hand = remote_processing
+    except Exception:
+        # processing 폴더를 안 쓰거나 move 실패하면 그냥 원래 위치에서 진행
+        remote_request_in_hand = remote_request
+
+    local_request = os.path.join("/tmp", fname)
+
+    print(f"Processing {fname}")
+    rclone_copy(remote_request_in_hand, local_request)
+
+    with open(local_request) as f:
+        req = json.load(f)
+
+    artifact_key = req["artifact_key"]
+    local_cache_path = os.path.join(LOCAL_CACHE, f"{artifact_key}.pkl")
+
+    if os.path.exists(local_cache_path):
+        print("Cache hit.")
+    else:
+        print("Computing MI...")
+        train_df = load_train_df(
+            req["mode"],
+            req.get("fold"),
+            req["seed"],
+            req["cfg"],
+        )
+        mi_dict = _get_mi_helper(
+            train_df,
+            req["seed"],
+            req["n_neighbors"]
+        )
+
+        with open(local_cache_path, "wb") as f:
+            pickle.dump(mi_dict, f)
+
+    remote_response = f"{RESPONSES_DIR}/{req['request_id']}.pkl"
+    rclone_copy(local_cache_path, remote_response)
+
+    # done 처리
+    # (processing에 있었으면 processing -> done, 아니면 requests -> done)
+    rclone_move(remote_request_in_hand, f"{DONE_DIR}/{fname}")
+    print("Done.")
+
+
 def main():
     print("MI worker started...")
 
     while True:
+        request_files = []
         try:
             request_files = rclone_list(REQUESTS_DIR)
-
-            for fname in request_files:
-                if not fname.endswith(".json"):
-                    continue
-
-                remote_request = f"{REQUESTS_DIR}/{fname}"
-                local_request = os.path.join("/tmp", fname)
-
-                print(f"Processing {fname}")
-                rclone_copy(remote_request, local_request)
-
-                with open(local_request) as f:
-                    req = json.load(f)
-
-                artifact_key = req["artifact_key"]
-                local_cache_path = os.path.join(
-                    LOCAL_CACHE,
-                    f"{artifact_key}.pkl"
-                )
-
-                # 캐시 확인
-                if os.path.exists(local_cache_path):
-                    print("Cache hit.")
-                else:
-                    print("Computing MI...")
-                    train_df = load_train_df(
-                        req["mode"],
-                        req["fold"],
-                        req["seed"],
-                        req["cfg"],
-                    )
-                    mi_dict = _get_mi_helper(
-                        train_df,
-                        req["seed"],
-                        req["n_neighbors"]
-                    )
-
-                    with open(local_cache_path, "wb") as f:
-                        pickle.dump(mi_dict, f)
-
-                # 응답 업로드
-                remote_response = f"{RESPONSES_DIR}/{req['request_id']}.pkl"
-                rclone_copy(local_cache_path, remote_response)
-
-                # done 처리
-                rclone_move(
-                    remote_request,
-                    f"{DONE_DIR}/{fname}"
-                )
-
-                print("Done.")
-
         except Exception as e:
-            print("Error:", e)
+            print("Error listing requests:", e)
+            time.sleep(5)
+            continue
+
+        for fname in request_files:
+            if not fname.endswith(".json"):
+                continue
+
+            ok = False
+            last_err = None
+
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    process_one_request_file(fname)
+                    ok = True
+                    break
+                except Exception as e:
+                    last_err = e
+                    print(f"[{fname}] attempt {attempt}/{MAX_RETRIES} failed: {e}")
+                    time.sleep(RETRY_SLEEP)
+
+            if not ok:
+                # 몇 번 시도해도 실패 -> failed로 이동시켜 큐에서 제거
+                print(f"[{fname}] failed after {MAX_RETRIES} retries. Moving to failed.")
+                try:
+                    # requests에 남아있을 수도, processing에 있을 수도 있음
+                    # 1) requests에 있으면 이동
+                    rclone_move(f"{REQUESTS_DIR}/{fname}", f"{FAILED_DIR}/{fname}")
+                except Exception:
+                    try:
+                        # 2) processing에 있으면 이동
+                        rclone_move(f"{PROCESSING_DIR}/{fname}", f"{FAILED_DIR}/{fname}")
+                    except Exception as e2:
+                        print(f"[{fname}] could not move to failed: {e2} (original error: {last_err})")
 
         time.sleep(5)
 

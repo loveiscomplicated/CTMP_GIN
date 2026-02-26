@@ -125,53 +125,63 @@ git checkout "$BRANCH"
 git pull origin "$BRANCH"
 
 # -----------------------
-# uv + venv
+# Miniconda + env
 # -----------------------
-# uv 설치 (standalone installer)
-# - CI/컨테이너에서는 UV_UNMANAGED_INSTALL로 경로 고정 추천
-#   (설치 스크립트가 쉘 프로필을 건드리지 않게)  :contentReference[oaicite:0]{index=0}
-if ! command -v uv >/dev/null 2>&1; then
-  echo "[$(ts)] installing uv"
-  apt update
-  apt install -y curl ca-certificates
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="/usr/local/bin" sh
+cd "$WORKSPACE_ROOT"
+if [[ ! -d "$CONDA_DIR" ]]; then
+  echo "[$(ts)] installing miniconda"
+  wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+  bash Miniconda3-latest-Linux-x86_64.sh -b -p "$CONDA_DIR"
+else
+  echo "[$(ts)] miniconda exists -> skip"
 fi
-echo "[$(ts)] uv: $(command -v uv)"
-uv --version
 
-# venv 생성 (python 3.12)
-# uv는 .venv를 기본으로 사용하고, 필요하면 Python도 내려받을 수 있음 :contentReference[oaicite:1]{index=1}
+source "$CONDA_SH"
+
+# ----------------------------------
+# Accept Anaconda ToS (non-interactive fix)
+# ----------------------------------
+# conda 함수 초기화 (tmux/non-interactive에서 중요)
+conda activate base || true
+
+# conda가 실제로 어디 걸리는지 로그로 확인
+echo "[$(ts)] conda: $(command -v conda)"
+conda --version
+
+# ToS accept (base에 확실히 기록)
+# conda 함수 초기화
+conda activate base || true
+
+# conda 경로 확인(진짜 실행 파일도 같이 보이게)
+echo "[$(ts)] conda: $(type -a conda | head -n 2)"
+conda --version
+
+# ToS accept (에러 메시지에 나온 그대로)
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
+
+# (선택) defaults 채널을 명시적으로 써서 override mismatch 방지
+conda config --set channels defaults || true
+conda config --set channel_priority flexible || true
+
+if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
+  echo "[$(ts)] conda env $ENV_NAME exists -> skip create"
+else
+  echo "[$(ts)] creating conda env $ENV_NAME"
+  conda create -y -n "$ENV_NAME" python=3.12
+fi
+
+conda activate "$ENV_NAME"
+
+# -----------------------
+# Python deps (your order)
+# -----------------------
+python -m pip install -U pip
+pip3 install torch torchvision
+pip install torch_geometric
 cd "$REPO_DIR"
-uv venv --python 3.12
-
-# 활성화(이후 python/pip 대신 uv pip 써도 되지만,
-# notify()에서 python을 쓰니 활성화해두면 안전)
-source .venv/bin/activate
-
-# -----------------------
-# Python deps
-# -----------------------
-# 1) torch/torchvision
-# PyTorch는 가속기별 빌드/별도 인덱스가 흔함(예: cu121, cpu 등) :contentReference[oaicite:2]{index=2}
-# - 가장 단순: 기본 인덱스로 설치
-uv pip install torch torchvision
-
-# (옵션) CUDA 인덱스를 명시하고 싶으면 예시:
-# uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# 2) torch_geometric
-# PyG는 최소 설치는 `torch_geometric`만으로 가능(추가 확장 라이브러리는 선택) :contentReference[oaicite:3]{index=3}
-uv pip install torch_geometric
-
-# (옵션) 확장 라이브러리까지(휠 권장, torch/cuda 조합에 맞춰 data.pyg.org 사용) :contentReference[oaicite:4]{index=4}
-# TORCH=$(python -c "import torch; print(torch.__version__.split('+')[0])")
-# CUDA=$(python -c "import torch; print('cpu' if torch.version.cuda is None else 'cu'+torch.version.cuda.replace('.',''))")
-# uv pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
-#   -f "https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html"
-
-# 3) 프로젝트 requirements
-uv pip install -r requirements.txt
-uv pip install requests
+pip install -r requirements.txt
+pip install requests
 
 # -----------------------
 # Data download
