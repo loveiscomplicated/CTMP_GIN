@@ -6,7 +6,7 @@ import random
 import torch
 import numpy as np
 import argparse
-
+from pathlib import Path
 from src.trainers.run_single_experiment import run_single_experiment  
 from scripts.request_mi import request_mi
 
@@ -199,6 +199,12 @@ def run_optuna(base_cfg, root: str, n_trials: int = 50, epochs: int = 20):
     ) # aggressive pruning
 
     model_name = base_cfg["model"]["name"]
+
+    # ✅ repo 루트(= 이 파일 기준으로 상위로) 잡고 runs/ 절대경로로 고정
+    repo_root = Path(__file__).resolve().parents[1]      # 필요하면 parents[2]로 조정
+    runs_dir  = repo_root / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
     study = optuna.create_study(
         direction="maximize",
         sampler=sampler,
@@ -230,7 +236,7 @@ if __name__ == "__main__":
     cur_dir = os.path.dirname(__file__)
     root = os.path.join(cur_dir, '..', 'data')
     root = os.path.abspath(root)
-    
+
     args = parse_args()
     base_cfg = load_yaml(args.config)
     run_optuna(base_cfg=base_cfg, root=root, n_trials=50, epochs=20)
