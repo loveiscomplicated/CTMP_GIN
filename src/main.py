@@ -20,6 +20,7 @@ def parse_args():
     # p.add_argument("--model", type=str, default=None) no need, model selection only based on config
     # more detailed adjustment able in config file
     p.add_argument("--is_mi_based_edge", type=int, default=None)
+    p.add_argument("--edge_cache_path", type=str, default=None)
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--batch_size", type=int, default=None)
     p.add_argument("--learning_rate", type=float, default=None)
@@ -39,6 +40,8 @@ def override_cfg(cfg: dict, args) -> dict:
         cfg["device"] = args.device
     if args.is_mi_based_edge is not None:
         cfg.setdefault("edge", {})["is_mi_based"] = bool(args.is_mi_based_edge)
+    if args.edge_cache_path is not None:
+        cfg.setdefault("edge", {})["cache_path"] = str(args.edge_cache_path)
     if args.batch_size is not None:
         cfg.setdefault("train", {})["batch_size"] = args.batch_size
     if args.learning_rate is not None:
@@ -53,7 +56,6 @@ def override_cfg(cfg: dict, args) -> dict:
         cfg.setdefault("train", {})["decision_threshold"] = args.decision_threshold
     if args.cv is not None:
         cfg.setdefault("cv", {})["cv"] = args.cv
-        
     return cfg
 
 def main():

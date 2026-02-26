@@ -6,7 +6,8 @@ import random
 import torch
 import numpy as np
 
-from src.trainers.run_single_experiment import run_single_experiment  # 네 경로에 맞게 수정
+from src.trainers.run_single_experiment import run_single_experiment  
+from scripts.request_mi import request_mi
 
 def suggest_ctmp_gin_params(trial, cfg):
     cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
@@ -148,10 +149,16 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
         for seed in objective_seeds:
             cfg_s = copy.deepcopy(cfg)
             cfg_s["train"]["seed"] = int(seed)
-            
+
             try:
+                mi_cache_path = request_mi(
+                    mode="single",
+                    fold=None,
+                    seed=seed,
+                    n_neighbors=cfg_s["edge"]["n_neighbors"],
+                )
                 # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=False)
-                out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=True,)
+                out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=True, mi_cache_path=mi_cache_path)
                 if model_name == "xgboost":
                     score = float(out["roc_auc"])
                 else:
@@ -220,7 +227,7 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
 if __name__ == "__main__":
     cur_dir = os.path.dirname(__file__)
     
-    config_path = os.path.join(cur_dir, '..', '..', 'configs', 'gin.yaml')
+    config_path = os.path.join(cur_dir, '..', '..', 'configs', 'xgboost.yaml')
     root = os.path.join(cur_dir, '..', 'data')
     
     config_path = os.path.abspath(config_path)

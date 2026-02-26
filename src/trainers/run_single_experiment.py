@@ -17,6 +17,7 @@ def run_single_experiment(cfg,
                           **kwargs):
     report_metric = kwargs.get("report_metric", "valid_auc")
     trial = kwargs.get("trial", None)
+    mi_cache_path = kwargs.get("mi_cache_path", None)
     # edge_cached=kwargs.get("edge_cached", True)
 
     logger = None
@@ -77,6 +78,9 @@ def run_single_experiment(cfg,
 
 
     # build edge_index
+    if mi_cache_path is not None:
+        cfg["edge"]["cache_path"] = mi_cache_path
+        
     edge_index = build_edge(model_name=cfg["model"]["name"],
                             root=root,
                             seed=seed,
