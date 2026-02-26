@@ -87,7 +87,6 @@ hold_forever() {
 
 echo "[$(ts)] ===== pipeline start ====="
 echo "[$(ts)] model_name: $MODEL_NAME"
-echo "[$(ts)] config    : $CONFIG_PATH"
 
 # 추가 (여기)
 echo "[$(ts)] RUNPOD_POD_ID='${RUNPOD_POD_ID:-}'"
@@ -196,7 +195,7 @@ gdown "$GDOWN_FILE_ID"
 cd "$REPO_DIR"
 echo "[$(ts)] training start"
 set +e
-python -m src.trainers.runpod_optuna
+python -m src.trainers.runpod_optuna --config "$CONFIG_PATH"
 TRAIN_RC=$?
 set -e
 
