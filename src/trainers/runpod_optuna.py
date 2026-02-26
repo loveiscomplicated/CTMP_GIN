@@ -508,8 +508,8 @@ if __name__ == "__main__":
     run_nested_cv_optuna(
         base_cfg=base_cfg,
         root=root,
-        outer_k=args.outer_k,
-        inner_k=args.inner_k,
+        outer_k=base_cfg["cv"]["outer_k"],
+        inner_k=base_cfg["cv"]["inner_k"],
         n_trials=args.n_trials,
         epochs=args.epochs,
         report_metric=args.report_metric,
