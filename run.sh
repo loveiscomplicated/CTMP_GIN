@@ -89,6 +89,15 @@ echo "[$(ts)] ===== pipeline start ====="
 echo "[$(ts)] model_name: $MODEL_NAME"
 echo "[$(ts)] config    : $CONFIG_PATH"
 
+# 추가 (여기)
+echo "[$(ts)] RUNPOD_POD_ID='${RUNPOD_POD_ID:-}'"
+if command -v runpodctl >/dev/null 2>&1; then
+  echo "[$(ts)] runpodctl: $(command -v runpodctl)"
+  runpodctl --version || true
+else
+  echo "[$(ts)] runpodctl not found"
+fi
+
 # -----------------------
 # System deps
 # -----------------------
@@ -231,7 +240,24 @@ done
 if [[ $ok -eq 1 ]]; then
   notify "[SUCCESS] Upload completed: ${RCLONE_REMOTE}:${RCLONE_DEST_DIR}"
   echo "[$(ts)] shutting down..."
-  shutdown -h now || poweroff || true
+  # -----------------------
+  # Stop/Terminate pod (RunPod-native)
+  # -----------------------
+  echo "[$(ts)] stopping pod via runpodctl..."
+
+  if command -v runpodctl >/dev/null 2>&1 && [[ -n "${RUNPOD_POD_ID:-}" ]]; then
+    # 1) stop (보통 과금 멈추는 목적이면 이걸 우선)
+    runpodctl stop pod "$RUNPOD_POD_ID" && exit 0
+
+    # 2) stop이 안 되면 remove(terminate) 시도
+    runpodctl remove pod "$RUNPOD_POD_ID" && exit 0
+
+    echo "[$(ts)] runpodctl stop/remove failed; falling back to process exit."
+  fi
+
+  # fallback: 컨테이너 프로세스 종료 (환경에 따라 pod가 내려갈 수도/아닐 수도)
+  kill -TERM 1 || true
+  exit 0
 else
   notify "[UPLOAD_FAIL] Upload failed after ${UPLOAD_RETRIES} attempts. Holding without shutdown."
   hold_forever
