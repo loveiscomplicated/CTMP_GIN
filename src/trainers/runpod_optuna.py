@@ -201,16 +201,20 @@ def run_optuna(base_cfg, root: str, n_trials: int = 50, epochs: int = 20):
     model_name = base_cfg["model"]["name"]
 
     # ✅ repo 루트(= 이 파일 기준으로 상위로) 잡고 runs/ 절대경로로 고정
-    repo_root = Path(__file__).resolve().parents[1]      # 필요하면 parents[2]로 조정
+    repo_root = Path(__file__).resolve().parents[2]      # 필요하면 parents[2]로 조정
     runs_dir  = repo_root / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
+
+
+    db_path = runs_dir / f"optuna_{model_name}.db"
+    storage = f"sqlite:///{db_path.as_posix()}"          # ✅ 절대경로는 sqlite:////... 형태가 됨
 
     study = optuna.create_study(
         direction="maximize",
         sampler=sampler,
         pruner=pruner,
         study_name=f"{model_name}",
-        storage=f"sqlite:///runs/optuna_{model_name}.db",
+        storage=storage,
         load_if_exists=True,
     )
 
