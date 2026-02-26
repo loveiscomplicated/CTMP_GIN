@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import pickle
@@ -6,6 +7,8 @@ import subprocess
 import pandas as pd
 from tqdm import tqdm
 from sklearn.feature_selection import mutual_info_classif
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.data_processing.data_utils import train_test_split_stratified
 from src.data_processing.tensor_dataset import TEDSTensorDataset
@@ -18,7 +21,6 @@ RESPONSES_DIR = f"{REMOTE_BASE}/responses"
 DONE_DIR = f"{REMOTE_BASE}/done"
 
 os.makedirs(LOCAL_CACHE, exist_ok=True)
-
 
 def rclone_copy(src, dst):
     subprocess.run(["rclone", "copyto", src, dst], check=True)
@@ -58,11 +60,6 @@ def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
 # 실제 train 데이터 로드 함수
 # -------------------------
 def load_train_df(mode, fold, seed, cfg):
-    """
-    ⚠️ 여기서 실제 fold/split 로직에 맞게
-    train subset을 정확히 로드해야 한다.
-        return train_df
-    """
     cur_dir = os.path.dirname(__file__)
     root = os.path.join(cur_dir, '..', 'src', 'data')
 
@@ -98,7 +95,7 @@ def load_train_df(mode, fold, seed, cfg):
         return train_df
 
     elif mode == "cv":
-        print("not implemented yet")
+        raise KeyError("not implemented yet")
 
 # -------------------------
 # 메인 루프
