@@ -526,17 +526,17 @@ if __name__ == "__main__":
     base_cfg = load_yaml(args.config)
 
     # cv 기본 메타 (run_single_experiment에서 읽도록 맞추면 좋음)
-    base_cfg.setdefault("cv", {})
-    base_cfg["cv"]["outer_k"] = 1# int(args.outer_k)
-    base_cfg["cv"]["inner_k"] = 1# int(args.inner_k)
+    '''base_cfg.setdefault("cv", {})
+    base_cfg["cv"]["outer_k"] = 3# int(args.outer_k)
+    base_cfg["cv"]["inner_k"] = 2# int(args.inner_k)'''
 
     run_nested_cv_optuna(
         base_cfg=base_cfg,
         root=root,
-        outer_k=base_cfg["cv"]["outer_k"],
-        inner_k=base_cfg["cv"]["inner_k"],
-        n_trials=1,
-        epochs=1,
+        outer_k=3,
+        inner_k=2,
+        n_trials=6,
+        epochs=20,
         report_metric="valid_auc",
         objective_seeds=(1,),
     )
