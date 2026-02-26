@@ -45,6 +45,8 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 # -----------------------
 # Build pipeline to run INSIDE tmux
 # -----------------------
+mkdir -p /root/.config/rclone
+echo "$RCLONE_CONF_B64" | base64 -d > /root/.config/rclone/rclone.conf
 PIPELINE="$(cat <<'BASH'
 set -euo pipefail
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
