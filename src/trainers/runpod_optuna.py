@@ -510,10 +510,10 @@ if __name__ == "__main__":
         root=root,
         outer_k=base_cfg["cv"]["outer_k"],
         inner_k=base_cfg["cv"]["inner_k"],
-        n_trials=args.n_trials,
-        epochs=args.epochs,
-        report_metric=args.report_metric,
-        objective_seeds=tuple(args.objective_seeds),
+        n_trials=1,
+        epochs=1,
+        report_metric="valid_auc",
+        objective_seeds=(1,),
     )
 
 '''if __name__ == "__main__":
