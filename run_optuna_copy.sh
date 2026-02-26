@@ -99,6 +99,9 @@ else
   echo "[$(ts)] runpodctl not found"
 fi
 
+uv pip install dotenv
+uv pip install optuna
+
 # -----------------------
 # Training
 # -----------------------
