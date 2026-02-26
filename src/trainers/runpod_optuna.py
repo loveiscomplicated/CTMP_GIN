@@ -103,6 +103,30 @@ def suggest_gin_gru_params(trial, cfg):
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
     cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
 
+def suggest_gin_gru_2_points_params(trial, cfg):
+    cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
+
+    cfg["model"]["params"]["gin_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["gin_layers"] = trial.suggest_int("gin_layers", 1, 6)
+    cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
+    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
+    cfg["model"]["params"]["gin_layer_out_dropout_p"] = trial.suggest_float("gin_layer_out_dropout_p", 0.0, 0.5)
+    cfg["model"]["params"]["gru_layer_out_dropout_p"] = trial.suggest_float("gru_layer_out_dropout_p", 0.0, 0.5)
+
+    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
+    cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
+    cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
+    cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
+   
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
+    cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
+    cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
+    cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
+    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+
+
 def suggest_xgboost_params(trial, cfg):
     cfg["train"]["n_estimators"] = trial.suggest_int("n_estimators", 800, 8000, step=200)
     cfg["train"]["max_depth"] = trial.suggest_int("max_depth", 3, 12)
@@ -128,6 +152,7 @@ PARAM_SUGGESTORS = {
     "gin": suggest_gin_params,
     "a3tgcn": suggest_a3tgcn_params,
     "gin_gru": suggest_gin_gru_params,
+    "gin_gru_2_points": suggest_gin_gru_2_points_params,
     "xgboost": suggest_xgboost_params
 }
 
