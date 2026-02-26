@@ -43,6 +43,7 @@ def request_mi(
     mode: str, # single or cv
     fold: int | None,
     seed: int,
+    cfg,
     n_neighbors: int,
     poll_interval_sec: int = 3,
     timeout_sec: int | None = None,
@@ -85,6 +86,7 @@ def request_mi(
             "fold": (fold if fold is not None else "none"),
             "seed": seed,
             "n_neighbors": n_neighbors,
+            "cfg": cfg,
         }
         tmp_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 

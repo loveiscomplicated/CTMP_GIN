@@ -166,6 +166,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                     fold=None,
                     seed=seed,
                     n_neighbors=cfg_s["edge"]["n_neighbors"],
+                    cfg=cfg_s,
                 )
                 # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=False)
                 out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=True, mi_cache_path=mi_cache_path)

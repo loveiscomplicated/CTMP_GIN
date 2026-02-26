@@ -7,6 +7,10 @@ import pandas as pd
 from tqdm import tqdm
 from sklearn.feature_selection import mutual_info_classif
 
+from src.data_processing.data_utils import train_test_split_stratified
+from src.data_processing.tensor_dataset import TEDSTensorDataset
+from src.utils.device_set import device_set
+
 REMOTE_BASE = "gdrive:CTMP_GIN_mi_service"
 LOCAL_CACHE = os.path.expanduser("~/mi_cache")
 REQUESTS_DIR = f"{REMOTE_BASE}/requests"
@@ -53,23 +57,48 @@ def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
 # -------------------------
 # 실제 train 데이터 로드 함수
 # -------------------------
-def load_train_df(mode, fold, seed):
+def load_train_df(mode, fold, seed, cfg):
     """
     ⚠️ 여기서 실제 fold/split 로직에 맞게
     train subset을 정확히 로드해야 한다.
+        return train_df
     """
-    # 예시 (수정 필요)
-    df = pd.read_pickle("~/data/tedsd_2022_full.pkl")
+    cur_dir = os.path.dirname(__file__)
+    root = os.path.join(cur_dir, '..', 'src', 'data')
 
-    if mode == "cv":
-        # fold 기준 train subset 생성 로직
-        train_df = df[df["fold"] != int(fold)]
-    else:
-        # seed 기준 random split
-        train_df = df.sample(frac=0.8, random_state=seed)
+    if mode == "single":
+        dataset = TEDSTensorDataset(
+                root=root,
+                binary=cfg["train"].get("binary", True),
+                ig_label=cfg["train"].get("ig_label", False),
+            )
 
-    return train_df
+        cfg["model"]["params"]["col_info"] = dataset.col_info
+        cfg["model"]["params"]["num_classes"] = dataset.num_classes
+        device = device_set(cfg["device"])
 
+        cfg["model"]["params"]["device"] = device
+        
+        num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+
+        if cfg["model"]["name"] == 'gin':
+            num_nodes = len(dataset.col_info[0]) + 1
+
+        print(f"num_nodes set to {num_nodes}")
+
+        # create dataloaders
+        split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
+        train_loader, val_loader, test_loader, idx = train_test_split_stratified(dataset=dataset,  # type: ignore
+                                                                                    batch_size=cfg['train']['batch_size'],
+                                                                                    ratio=split_ratio,
+                                                                                    seed=seed,
+                                                                                    num_workers=cfg['train']['num_workers'],
+                                                                                    )
+        train_df = dataset.processed_df.iloc[idx[0]]
+        return train_df
+
+    elif mode == "cv":
+        print("not implemented yet")
 
 # -------------------------
 # 메인 루프
@@ -108,7 +137,8 @@ def main():
                     train_df = load_train_df(
                         req["mode"],
                         req["fold"],
-                        req["seed"]
+                        req["seed"],
+                        req["cfg"],
                     )
                     mi_dict = _get_mi_helper(
                         train_df,
