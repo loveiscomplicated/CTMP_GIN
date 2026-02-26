@@ -156,7 +156,7 @@ source .venv/bin/activate
 # 1) torch/torchvision
 # PyTorch는 가속기별 빌드/별도 인덱스가 흔함(예: cu121, cpu 등) :contentReference[oaicite:2]{index=2}
 # - 가장 단순: 기본 인덱스로 설치
-uv pip install torch torchvision
+# uv pip install torch torchvision
 
 # (옵션) CUDA 인덱스를 명시하고 싶으면 예시:
 # uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
