@@ -90,10 +90,18 @@ def request_mi(
         }
         tmp_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-        # 3) upload request
-        _run(["rclone", "copyto", str(tmp_json), f"{REMOTE_BASE}/requests/{request_id}.json"])
+        # 3) ensure remote dirs exist (idempotent)
+        _run(["rclone", "mkdir", f"{REMOTE_BASE}/requests"])
+        _run(["rclone", "mkdir", f"{REMOTE_BASE}/responses"])
 
-        # 4) poll for response
+        # 4) upload request
+        _run([
+            "rclone", "copyto",
+            str(tmp_json),
+            f"{REMOTE_BASE}/requests/{request_id}.json",
+        ])
+
+        # 5) poll for response
         start = time.time()
         remote_pkl = f"{REMOTE_BASE}/responses/{request_id}.pkl"
         while True:
@@ -105,10 +113,17 @@ def request_mi(
             try:
                 _run(["rclone", "lsf", remote_pkl])
                 break
-            except subprocess.CalledProcessError:
+            except subprocess.CalledProcessError as e:
+                msg = (
+                    f"[CMD FAILED]\n"
+                    f"returncode: {e.returncode}\n"
+                    f"stdout:\n{e.stdout}\n"
+                    f"stderr:\n{e.stderr}\n"
+                )
                 time.sleep(poll_interval_sec)
+                raise RuntimeError(msg) from e
 
-        # 5) download to local cache
+        # 6) download to local cache
         _run(["rclone", "copyto", remote_pkl, str(local_pkl)])
 
         return str(local_pkl)
