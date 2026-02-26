@@ -27,7 +27,7 @@ train:
   train_ratio: 0.70
   val_ratio: 0.15
   test_ratio: 0.15
-  num_workers: 0
+  num_workers: 3
   lr_scheduler_patience: 5
   early_stopping_patience: 12
   decision_threshold: 0.5
