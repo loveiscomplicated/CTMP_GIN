@@ -244,7 +244,7 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
 if __name__ == "__main__":
     cur_dir = os.path.dirname(__file__)
     
-    config_path = os.path.join(cur_dir, '..', '..', 'configs', 'gin.yaml')
+    config_path = os.path.join(cur_dir, '..', '..', 'configs', 'gin_gru_2_points.yaml')
     root = os.path.join(cur_dir, '..', 'data')
     
     config_path = os.path.abspath(config_path)
