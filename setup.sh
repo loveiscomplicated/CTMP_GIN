@@ -34,10 +34,6 @@ PIPELINE="$(cat <<'BASH'
 set -euo pipefail
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
-MODEL_NAME="__MODEL_NAME__"
-CONFIG_PATH="__CONFIG_PATH__"
-SEED="__SEED__"
-
 WORKSPACE_ROOT="__WORKSPACE_ROOT__"
 REPO_URL="__REPO_URL__"
 REPO_DIR="__REPO_DIR__"
@@ -70,11 +66,6 @@ hold_forever() {
   echo "[$(ts)] holding forever..."
   while true; do sleep 3600; done
 }
-
-echo "[$(ts)] ===== pipeline start ====="
-echo "[$(ts)] model_name: $MODEL_NAME"
-echo "[$(ts)] config    : $CONFIG_PATH"
-echo "[$(ts)] seed      : $SEED"
 
 # 추가 (여기)
 echo "[$(ts)] RUNPOD_POD_ID='${RUNPOD_POD_ID:-}'"
@@ -181,9 +172,6 @@ BASH
 )"
 
 # Fill placeholders
-PIPELINE="${PIPELINE//__MODEL_NAME__/${MODEL_NAME}}"
-PIPELINE="${PIPELINE//__CONFIG_PATH__/${CONFIG_PATH}}"
-PIPELINE="${PIPELINE//__SEED__/${SEED}}"
 PIPELINE="${PIPELINE//__WORKSPACE_ROOT__/${WORKSPACE_ROOT}}"
 PIPELINE="${PIPELINE//__REPO_URL__/${REPO_URL}}"
 PIPELINE="${PIPELINE//__REPO_DIR__/${REPO_DIR}}"
