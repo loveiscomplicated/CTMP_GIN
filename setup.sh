@@ -2,23 +2,6 @@
 set -euo pipefail
 
 # -----------------------
-# Args
-# -----------------------
-if [[ $# -lt 3 ]]; then
-  echo "Usage: bash run.sh <model_name> <config_path> <seed>"
-  echo "Example: bash run.sh gin configs/gin.yaml 1"
-  exit 1
-fi
-
-MODEL_NAME="$1"
-CONFIG_PATH="$2"
-SEED="$3"
-
-echo "model_name: ${MODEL_NAME}"
-echo "config    : ${CONFIG_PATH}"
-echo "seed      : ${SEED}" 
-
-# -----------------------
 # Constants
 # -----------------------
 WORKSPACE_ROOT="/workspace"
