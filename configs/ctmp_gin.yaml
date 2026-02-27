@@ -42,6 +42,6 @@ train:
 
   ig_label: False # include Neutral labels for Integrated Gradients Method
                   # Must set to False except using Integrated Gradients
-  cv: True
+  cv: False
   n_folds: 5
   
