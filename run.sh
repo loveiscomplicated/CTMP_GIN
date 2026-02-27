@@ -41,6 +41,7 @@ UPLOAD_RETRIES=3
 
 # notifier
 SEND_MESSAGE_PY="${REPO_DIR}/src/utils/send_message.py"
+BOT_NAME="Runpod_main_py_$MODEL_NAME"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
@@ -77,7 +78,7 @@ SEND_MESSAGE_PY="__SEND_MESSAGE_PY__"
 notify() {
   local msg="$1"
   if [[ -f "$SEND_MESSAGE_PY" ]]; then
-    python "$SEND_MESSAGE_PY" "$msg" || true
+    python "$SEND_MESSAGE_PY" "$msg" "$BOT_NAME" || true
   else
     echo "[$(ts)] send_message.py not found: $SEND_MESSAGE_PY"
   fi
