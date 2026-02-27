@@ -131,10 +131,17 @@ def process_one_request_file(fname: str):
     artifact_key = req["artifact_key"]
     local_cache_path = os.path.join(LOCAL_CACHE, f"{artifact_key}.pkl")
 
-    if os.path.exists(local_cache_path):
-        print("Cache hit.")
+    # 요청에서 캐시 사용 여부를 확인 (기본값 True)
+    use_cache = req.get("use_cache", True)
+
+    if use_cache and os.path.exists(local_cache_path):
+        print(f"Cache hit for {artifact_key}.")
     else:
-        print("Computing MI...")
+        if not use_cache:
+            print(f"Cache bypass requested for {artifact_key}. Computing MI...")
+        else:
+            print(f"Cache miss for {artifact_key}. Computing MI...")
+            
         train_df = load_train_df(
             req["mode"],
             req.get("fold"),
@@ -147,6 +154,7 @@ def process_one_request_file(fname: str):
             req["n_neighbors"]
         )
 
+        # 계산 결과를 로컬 캐시에 저장 (다음 번에 use_cache=True인 요청이 오면 활용됨)
         with open(local_cache_path, "wb") as f:
             pickle.dump(mi_dict, f)
 

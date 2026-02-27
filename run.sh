@@ -309,7 +309,8 @@ printf "%s" "$PIPELINE" > "$PIPE_PATH"
 chmod +x "$PIPE_PATH"
 
 # Run pipeline in that tmux session
-tmux send-keys -t "${MODEL_NAME}" "bash $PIPE_PATH" C-m
+tmux set-environment -t "${SESSION_NAME}" RCLONE_CONF_B64 "${RCLONE_CONF_B64:-}"
+tmux send-keys -t "${SESSION_NAME}" "bash $PIPE_PATH" C-m
 
-echo "[$(ts)] started in tmux session '${MODEL_NAME}'."
-echo "Attach with: tmux attach -t ${MODEL_NAME}"
+echo "[$(ts)] started in tmux session '${SESSION_NAME}'."
+echo "Attach with: tmux attach -t ${SESSION_NAME}"

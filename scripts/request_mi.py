@@ -91,6 +91,7 @@ def request_mi(
     timeout_sec: int | None = None,
     serialize_cfg_default_str: bool = True,
     verbose_poll: bool = False,
+    use_cache: bool = True,
 ) -> str:
     """
     Request mi_dict from worker via rclone remote folder, blocking until ready.
@@ -111,6 +112,7 @@ def request_mi(
         timeout_sec: None for no timeout
         serialize_cfg_default_str: if True, json.dumps(..., default=str) to avoid non-serializable objects
         verbose_poll: if True, prints progress every ~10 polls
+        use_cache: if True, use local cache if available
 
     Returns:
         str: local pickle path
@@ -119,7 +121,7 @@ def request_mi(
     local_pkl = LOCAL_CACHE_DIR / f"{artifact_key}.pkl"
 
     # 1) local cache hit
-    if local_pkl.exists():
+    if use_cache and local_pkl.exists():
         return str(local_pkl)
 
     # 2) local lock (avoid duplicate request on same node)
@@ -131,7 +133,7 @@ def request_mi(
 
     try:
         # re-check after lock
-        if local_pkl.exists():
+        if use_cache and local_pkl.exists():
             return str(local_pkl)
 
         request_id = _request_id_from_artifact(artifact_key)
@@ -145,6 +147,7 @@ def request_mi(
             "seed": seed,
             "n_neighbors": n_neighbors,
             "cfg": cfg,
+            "use_cache": use_cache,
         }
 
         dumps_kwargs = {"ensure_ascii": False}
