@@ -65,7 +65,6 @@ def main():
     cfg = override_cfg(cfg, args)
 
     '''mi_cache_path = request_mi(
-        model_name=cfg["model"].get("name", "Unnamed"),
         mode="single",
         seed=cfg.get("seed", 1),
         fold=None,

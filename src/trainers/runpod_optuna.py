@@ -190,6 +190,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                     mode="single",
                     fold=None,
                     seed=seed,
+                    cfg=cfg_s,
                     n_neighbors=cfg_s["edge"]["n_neighbors"]
                 )
                 # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=False)
@@ -336,6 +337,7 @@ def inner_objective_factory(
                         mode="cv",
                         fold=int(inner_fold),
                         seed=seed,
+                        cfg=cfg_s,
                         n_neighbors=cfg_s["edge"]["n_neighbors"]
                     )
 
@@ -457,6 +459,7 @@ def run_nested_cv_optuna(
                 mode="cv",
                 fold=int(outer_fold),
                 seed=int(seed),
+                cfg=cfg_s,
                 n_neighbors=cfg_s["edge"]["n_neighbors"],
             )
 
