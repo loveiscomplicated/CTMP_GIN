@@ -45,7 +45,7 @@ def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int, mode
 
 def _request_id_from_artifact(artifact_key: str) -> str:
     # short stable hash + timestamp (avoid overly long names, avoid collisions)
-    h = hashlib.sha1(artifact_key.encode("utf-8")).hexdigest()[:10]
+    h = hashlib.sha1(artifact_key.encode("utf-8")).hexdigest()
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{ts}__{h}"
 
