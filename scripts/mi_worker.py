@@ -51,7 +51,7 @@ def rclone_list(remote_path):
     return result.stdout.splitlines()
 
 
-def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
+def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int):
     mi_dict = {}
     for col in tqdm(df.columns):
         x = df.drop(col, axis=1)

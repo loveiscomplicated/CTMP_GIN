@@ -33,13 +33,14 @@ def _run(cmd: list[str]) -> str:
         ) from e
 
 
-def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int, model_name) -> str:
+def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int) -> str:
+
     if mode == "cv":
         if fold is None:
             raise ValueError("mode=cv requires fold")
-        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__nn={n_neighbors}__model={model_name}__disc=1"
+        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__n_neighbors={n_neighbors}"
     if mode == "single":
-        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__nn={n_neighbors}__model={model_name}__disc=1"
+        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__n_neighbors={n_neighbors}"
     raise ValueError("mode must be 'cv' or 'single'")
 
 
@@ -78,14 +79,11 @@ def _release_lock(lock_dir: Path) -> None:
     # robust cleanup
     shutil.rmtree(lock_dir, ignore_errors=True)
 
-
 def request_mi(
     *,
-    model_name: str,
     mode: str,  # "single" or "cv"
     fold: int | None,
     seed: int,
-    cfg: Any,
     n_neighbors: int,
     poll_interval_sec: int = 3,
     timeout_sec: int | None = None,
@@ -117,7 +115,7 @@ def request_mi(
     Returns:
         str: local pickle path
     """
-    artifact_key = _artifact_key(mode, fold, seed, n_neighbors, model_name)
+    artifact_key = _artifact_key(mode, fold, seed, n_neighbors)
     local_pkl = LOCAL_CACHE_DIR / f"{artifact_key}.pkl"
 
     # 1) local cache hit
@@ -143,10 +141,9 @@ def request_mi(
             "request_id": request_id,
             "artifact_key": artifact_key,
             "mode": mode,
-            "fold": (fold if fold is not None else "none"),
+            "fold": fold,
             "seed": seed,
             "n_neighbors": n_neighbors,
-            "cfg": cfg,
             "use_cache": use_cache,
         }
 
