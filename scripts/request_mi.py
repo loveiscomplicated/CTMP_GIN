@@ -1,11 +1,11 @@
 import json
+import os
 import time
 import hashlib
 import subprocess
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 
 DATASET_ID = "tedsd_2022"
@@ -34,7 +34,6 @@ def _run(cmd: list[str]) -> str:
 
 
 def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int) -> str:
-
     if mode == "cv":
         if fold is None:
             raise ValueError("mode=cv requires fold")
@@ -57,20 +56,35 @@ def _ensure_remote_dirs() -> None:
     _run(["rclone", "mkdir", f"{REMOTE_BASE}/responses"])
 
 
-def _acquire_lock(lock_dir: Path, local_pkl: Path) -> bool:
+def _acquire_lock(lock_dir: Path, local_pkl: Path, use_cache: bool = True) -> bool:
     """
     Acquire local lock directory. Returns True if acquired.
     If lock exists, waits until either pkl exists (then returns False) or lock becomes available.
+    Detects and clears stale locks left by crashed processes.
     """
     while True:
-        if local_pkl.exists():
+        if use_cache and local_pkl.exists():
             return False
         try:
             lock_dir.mkdir()
+            (lock_dir / "pid").write_text(str(os.getpid()))
             return True
         except FileExistsError:
-            # someone else is requesting
-            if local_pkl.exists():
+            # Check for stale lock (owning process no longer alive)
+            pid_file = lock_dir / "pid"
+            try:
+                pid = int(pid_file.read_text())
+                os.kill(pid, 0)  # signal 0: existence check only
+            except (FileNotFoundError, ValueError):
+                pass  # cannot determine, wait
+            except ProcessLookupError:
+                # Stale lock — owning process is gone
+                shutil.rmtree(lock_dir, ignore_errors=True)
+                continue
+            except PermissionError:
+                pass  # process exists but we can't signal it
+
+            if use_cache and local_pkl.exists():
                 return False
             time.sleep(1)
 
@@ -84,6 +98,7 @@ def request_mi(
     mode: str,  # "single" or "cv"
     fold: int | None,
     seed: int,
+    cfg: dict,
     n_neighbors: int,
     poll_interval_sec: int = 3,
     timeout_sec: int | None = None,
@@ -124,11 +139,12 @@ def request_mi(
 
     # 2) local lock (avoid duplicate request on same node)
     lock_dir = LOCAL_CACHE_DIR / f"{artifact_key}.lock"
-    acquired = _acquire_lock(lock_dir, local_pkl)
+    acquired = _acquire_lock(lock_dir, local_pkl, use_cache)
     if not acquired:
         # someone else produced it while we waited
         return str(local_pkl)
 
+    tmp_json = None
     try:
         # re-check after lock
         if use_cache and local_pkl.exists():
@@ -143,6 +159,7 @@ def request_mi(
             "mode": mode,
             "fold": fold,
             "seed": seed,
+            "cfg": cfg,
             "n_neighbors": n_neighbors,
             "use_cache": use_cache,
         }
@@ -188,4 +205,6 @@ def request_mi(
         return str(local_pkl)
 
     finally:
+        if tmp_json is not None:
+            tmp_json.unlink(missing_ok=True)
         _release_lock(lock_dir)

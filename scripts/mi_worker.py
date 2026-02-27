@@ -45,6 +45,7 @@ def rclone_move(src, dst):
 def rclone_list(remote_path):
     result = subprocess.run(
         ["rclone", "lsf", remote_path],
+        check=True,
         capture_output=True,
         text=True
     )
