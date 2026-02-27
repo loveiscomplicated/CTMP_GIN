@@ -7,7 +7,7 @@ edge:
   threshold: 0.0
   pruning_ratio: 0.3
   return_edge_attr: False # CAUTION: potential error when set to True
-  edge_cached: True
+  edge_cached: False
   cache_path: "./src/data/mi/gin_mi_dict_1.pickle"
 
 model:

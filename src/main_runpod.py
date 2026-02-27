@@ -64,19 +64,20 @@ def main():
     cfg = load_yaml(args.config)
     cfg = override_cfg(cfg, args)
 
-    mi_cache_path = request_mi(
+    '''mi_cache_path = request_mi(
         model_name=cfg["model"].get("name", "Unnamed"),
         mode="single",
         seed=cfg.get("seed", 1),
         fold=None,
         cfg=cfg,
         n_neighbors=cfg["edge"].get("n_neighbors", 1),
-    )
+    )'''
     
     if cfg["train"]["cv"]:
         run_kfold_experiment(cfg, root)
     else:
-        run_single_experiment(cfg, root, mi_cache_path=mi_cache_path)
+        # run_single_experiment(cfg, root, mi_cache_path=mi_cache_path)
+        run_single_experiment(cfg, root)
 
 if __name__ == "__main__":
     main()

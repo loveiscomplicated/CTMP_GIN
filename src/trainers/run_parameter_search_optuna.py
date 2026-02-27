@@ -141,7 +141,8 @@ PARAM_SUGGESTORS = {
     "gin": suggest_gin_params,
     "a3tgcn": suggest_a3tgcn_params,
     "gin_gru": suggest_gin_gru_params,
-    "xgboost": suggest_xgboost_params
+    "xgboost": suggest_xgboost_params,
+    "gin_gru_2_points": suggest_gin_gru_2_points_params,
 }
 
 def load_cfg(path: str):
