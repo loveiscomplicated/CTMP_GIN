@@ -29,7 +29,7 @@ train:
   test_ratio: 0.15
   num_workers: 3
   lr_scheduler_patience: 5
-  early_stopping_patience: 12
+  early_stopping_patience: 8
   decision_threshold: 0.5
   optimizer: "adam"
   weight_decay: 0.0003

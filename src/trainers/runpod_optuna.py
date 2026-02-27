@@ -44,7 +44,7 @@ def suggest_ctmp_gin_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
-    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+    # cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
 
 def suggest_gin_params(trial, cfg):
     cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
@@ -64,7 +64,7 @@ def suggest_gin_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
-    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+    # cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
 
 def suggest_a3tgcn_params(trial, cfg):
     cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
@@ -80,7 +80,7 @@ def suggest_a3tgcn_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
-    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+    # cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
 
 def suggest_gin_gru_params(trial, cfg):
     cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
@@ -101,7 +101,7 @@ def suggest_gin_gru_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
-    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+    # cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
 
 def suggest_gin_gru_2_points_params(trial, cfg):
     cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
@@ -124,7 +124,7 @@ def suggest_gin_gru_2_points_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
-    cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
+    # cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
 
 
 def suggest_xgboost_params(trial, cfg):
@@ -526,9 +526,9 @@ if __name__ == "__main__":
     base_cfg = load_yaml(args.config)
 
     # cv 기본 메타 (run_single_experiment에서 읽도록 맞추면 좋음)
-    '''base_cfg.setdefault("cv", {})
+    base_cfg.setdefault("cv", {})
     base_cfg["cv"]["outer_k"] = 3# int(args.outer_k)
-    base_cfg["cv"]["inner_k"] = 2# int(args.inner_k)'''
+    base_cfg["cv"]["inner_k"] = 2# int(args.inner_k)
 
     run_nested_cv_optuna(
         base_cfg=base_cfg,

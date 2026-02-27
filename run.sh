@@ -4,17 +4,19 @@ set -euo pipefail
 # -----------------------
 # Args
 # -----------------------
-if [[ $# -lt 2 ]]; then
-  echo "Usage: bash run.sh <model_name> <config_path>"
-  echo "Example: bash run.sh gin configs/gin.yaml"
+if [[ $# -lt 3 ]]; then
+  echo "Usage: bash run.sh <model_name> <config_path> <seed>"
+  echo "Example: bash run.sh gin configs/gin.yaml 1"
   exit 1
 fi
 
 MODEL_NAME="$1"
 CONFIG_PATH="$2"
+SEED="$3"
 
 echo "model_name: ${MODEL_NAME}"
 echo "config    : ${CONFIG_PATH}"
+echo "seed      : ${SEED}" 
 
 # -----------------------
 # Constants
@@ -51,6 +53,7 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
 MODEL_NAME="__MODEL_NAME__"
 CONFIG_PATH="__CONFIG_PATH__"
+SEED="__SEED__"
 
 WORKSPACE_ROOT="__WORKSPACE_ROOT__"
 REPO_URL="__REPO_URL__"
@@ -88,6 +91,7 @@ hold_forever() {
 echo "[$(ts)] ===== pipeline start ====="
 echo "[$(ts)] model_name: $MODEL_NAME"
 echo "[$(ts)] config    : $CONFIG_PATH"
+echo "[$(ts)] seed      : $SEED"
 
 # 추가 (여기)
 echo "[$(ts)] RUNPOD_POD_ID='${RUNPOD_POD_ID:-}'"
@@ -196,14 +200,14 @@ gdown "$GDOWN_FILE_ID"
 cd "$REPO_DIR"
 echo "[$(ts)] training start"
 set +e
-python -m src.main --config "$CONFIG_PATH"
+python -m src.main --config "$CONFIG_PATH" --seed "$SEED"
 TRAIN_RC=$?
 set -e
 
 if [[ $TRAIN_RC -eq 0 ]]; then
-  notify "[SUCCESS] Training completed. model=$MODEL_NAME config=$CONFIG_PATH"
+  notify "[SUCCESS] Training completed. model=$MODEL_NAME config=$CONFIG_PATH seed=$SEED"
 else
-  notify "[FAIL] Training failed (rc=$TRAIN_RC). model=$MODEL_NAME config=$CONFIG_PATH"
+  notify "[FAIL] Training failed (rc=$TRAIN_RC). model=$MODEL_NAME config=$CONFIG_PATH seed=$SEED"
 fi
 
 # -----------------------
@@ -268,6 +272,7 @@ BASH
 # Fill placeholders
 PIPELINE="${PIPELINE//__MODEL_NAME__/${MODEL_NAME}}"
 PIPELINE="${PIPELINE//__CONFIG_PATH__/${CONFIG_PATH}}"
+PIPELINE="${PIPELINE//__SEED__/${SEED}}"
 PIPELINE="${PIPELINE//__WORKSPACE_ROOT__/${WORKSPACE_ROOT}}"
 PIPELINE="${PIPELINE//__REPO_URL__/${REPO_URL}}"
 PIPELINE="${PIPELINE//__REPO_DIR__/${REPO_DIR}}"

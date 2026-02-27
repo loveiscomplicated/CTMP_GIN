@@ -34,5 +34,13 @@ train:
   lr_scheduler_patience: 10
   early_stopping_patience: 15
   decision_threshold: 0.5
-  cv: False
+  cv: False # kfold crosss validation
   n_folds: 5
+
+cv: # optuna 
+  mode:
+  outer_k: 1
+  inner_k: 1
+  n_trials: 1
+  epochs: 20
+  
