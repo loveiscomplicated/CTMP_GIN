@@ -35,7 +35,7 @@ def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int):
         mi_dict[col] = mi_series
     return mi_dict
 
-def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str, n_neighbors=3):
+def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str | None, n_neighbors=3):
     """
     Compute and save mutual information dictionary for all variables.
 
@@ -50,9 +50,9 @@ def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str, n_neighbor
     """
     train_df = _remove_target(train_df)
     mi_dict = _get_mi_helper(train_df, seed, n_neighbors)
-    with open(mi_dict_path, 'wb') as f:
-        pickle.dump(mi_dict, f)
-    
+    if mi_dict_path is not None:
+        with open(mi_dict_path, 'wb') as f:
+            pickle.dump(mi_dict, f)
     return mi_dict
 
 def _seperate_ad(mi_dict: dict, ad_col_list):
