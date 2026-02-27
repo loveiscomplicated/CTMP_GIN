@@ -14,7 +14,7 @@ def _remove_target(df: pd.DataFrame):
         cols.discard('REASONb')
     return df[list(cols)].copy(deep=True)
 
-def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors):
+def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int):
     """
     Compute mutual information (MI) between each column and all remaining columns.
 
