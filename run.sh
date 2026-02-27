@@ -295,11 +295,13 @@ PIPELINE="${PIPELINE//__SEND_MESSAGE_PY__/${SEND_MESSAGE_PY}}"
 apt update
 apt install -y tmux
 
-if tmux has-session -t "${MODEL_NAME}" 2>/dev/null; then
-  echo "[$(ts)] tmux session exists: ${MODEL_NAME}"
+SESSION_NAME="${MODEL_NAME}_seed${SEED}"
+
+if tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
+  echo "[$(ts)] tmux session exists: ${SESSION_NAME}"
 else
-  echo "[$(ts)] creating tmux session: ${MODEL_NAME}"
-  tmux new-session -d -s "${MODEL_NAME}"
+  echo "[$(ts)] creating tmux session: ${SESSION_NAME}"
+  tmux new-session -d -s "${SESSION_NAME}"
 fi
 
 PIPE_PATH="/tmp/${MODEL_NAME}__pipeline.sh"
