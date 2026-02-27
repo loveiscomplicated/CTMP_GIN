@@ -33,13 +33,13 @@ def _run(cmd: list[str]) -> str:
         ) from e
 
 
-def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int) -> str:
+def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int, model_name) -> str:
     if mode == "cv":
         if fold is None:
             raise ValueError("mode=cv requires fold")
-        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__nn={n_neighbors}__disc=1"
+        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__nn={n_neighbors}__model={model_name}__disc=1"
     if mode == "single":
-        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__nn={n_neighbors}__disc=1"
+        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__nn={n_neighbors}__model={model_name}__disc=1"
     raise ValueError("mode must be 'cv' or 'single'")
 
 
@@ -81,6 +81,7 @@ def _release_lock(lock_dir: Path) -> None:
 
 def request_mi(
     *,
+    model_name: str,
     mode: str,  # "single" or "cv"
     fold: int | None,
     seed: int,
@@ -114,7 +115,7 @@ def request_mi(
     Returns:
         str: local pickle path
     """
-    artifact_key = _artifact_key(mode, fold, seed, n_neighbors)
+    artifact_key = _artifact_key(mode, fold, seed, n_neighbors, model_name)
     local_pkl = LOCAL_CACHE_DIR / f"{artifact_key}.pkl"
 
     # 1) local cache hit

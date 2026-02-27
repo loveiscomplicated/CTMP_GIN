@@ -63,8 +63,9 @@ def main():
     args = parse_args()
     cfg = load_yaml(args.config)
     cfg = override_cfg(cfg, args)
-    
+
     mi_cache_path = request_mi(
+        model_name=cfg["model"].get("name", "Unnamed"),
         mode="single",
         seed=cfg.get("seed", 1),
         fold=None,
