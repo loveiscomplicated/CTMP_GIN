@@ -7,7 +7,7 @@ edge:
   threshold: 0.0
   pruning_ratio: 0.3
   return_edge_attr: False # CAUTION: potential error when set to True
-  edge_cached: True
+  edge_cached: False
   cache_path: "./src/data/mi/gin_mi_dict_1.pickle"
 
 model:
@@ -29,7 +29,7 @@ train:
   test_ratio: 0.15
   num_workers: 3
   lr_scheduler_patience: 5
-  early_stopping_patience: 8
+  early_stopping_patience: 10
   decision_threshold: 0.5
   optimizer: "adam"
   weight_decay: 0.0003

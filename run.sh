@@ -200,7 +200,7 @@ gdown "$GDOWN_FILE_ID"
 cd "$REPO_DIR"
 echo "[$(ts)] training start"
 set +e
-python -m src.main --config "$CONFIG_PATH" --seed "$SEED"
+python -m src.main_runpod --config "$CONFIG_PATH" --seed "$SEED"
 TRAIN_RC=$?
 set -e
 

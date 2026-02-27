@@ -37,7 +37,7 @@ train:
   optimizer: "adamw"
   weight_decay: 0.00027052923508629883
   lr_scheduler_patience: 5
-  early_stopping_patience: 8 # 원래 10
+  early_stopping_patience: 10 # 원래 10
   decision_threshold: 0.5
 
   ig_label: False # include Neutral labels for Integrated Gradients Method
