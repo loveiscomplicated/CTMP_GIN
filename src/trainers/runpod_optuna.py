@@ -189,10 +189,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                 mi_cache_path = request_mi(
                     mode="single",
                     fold=None,
-                    seed=seed,
-                    n_neighbors=cfg_s["edge"]["n_neighbors"],
                     cfg=cfg_s,
-                    model_name=cfg_s["model"]["name"]
                 )
                 # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=False)
                 out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=True, mi_cache_path=mi_cache_path)
@@ -232,9 +229,7 @@ def run_optuna(base_cfg, root: str, n_trials: int = 50, epochs: int = 20):
     runs_dir  = repo_root / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
 
-
-    db_path = runs_dir / f"optuna_{model_name}.db"
-    storage = f"sqlite:///{db_path.as_posix()}"          # ✅ 절대경로는 sqlite:////... 형태가 됨
+    storage = "postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db"  
 
     study = optuna.create_study(
         direction="maximize",
@@ -339,8 +334,7 @@ def inner_objective_factory(
                     mi_cache_path = request_mi(
                         mode="cv",
                         fold=int(inner_fold),
-                        seed=int(seed),
-                        n_neighbors=cfg_s["edge"]["n_neighbors"],
+                        seed=seed,
                         cfg=cfg_s,
                     )
 
@@ -384,9 +378,8 @@ def run_nested_cv_optuna(
     model_name = base_cfg["model"]["name"]
 
     # 공용 DB (outer fold별로 study_name만 다르게)
-    db_path = runs_dir / f"optuna_nested_{model_name}.db"
-    storage = f"sqlite:///{db_path.as_posix()}"
-
+    storage = "postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db"
+    
     sampler = optuna.samplers.TPESampler(seed=42, multivariate=True)
     pruner = optuna.pruners.HyperbandPruner(
         min_resource=5,
