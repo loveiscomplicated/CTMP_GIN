@@ -16,6 +16,9 @@ CONFIG_PATH="$2"
 echo "model_name: ${MODEL_NAME}"
 echo "config    : ${CONFIG_PATH}"
 
+bash setup.sh
+bash postgres.sh
+
 # -----------------------
 # Constants
 # -----------------------
@@ -43,37 +46,6 @@ BOT_NAME="runpod_optuna_$MODEL_NAME"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
-# -----------------------
-# Build pipeline to run INSIDE tmux
-# -----------------------
-mkdir -p /root/.config/rclone
-echo "$RCLONE_CONF_B64" | base64 -d > /root/.config/rclone/rclone.conf
-PIPELINE="$(cat <<'BASH'
-set -euo pipefail
-ts() { date '+%Y-%m-%d %H:%M:%S'; }
-
-MODEL_NAME="__MODEL_NAME__"
-CONFIG_PATH="__CONFIG_PATH__"
-
-WORKSPACE_ROOT="__WORKSPACE_ROOT__"
-REPO_URL="__REPO_URL__"
-REPO_DIR="__REPO_DIR__"
-BRANCH="__BRANCH__"
-
-CONDA_DIR="__CONDA_DIR__"
-CONDA_SH="__CONDA_SH__"
-ENV_NAME="__ENV_NAME__"
-
-RUNS_DIR="__RUNS_DIR__"
-DATA_DIR="__DATA_DIR__"
-GDOWN_FILE_ID="__GDOWN_FILE_ID__"
-
-RCLONE_REMOTE="__RCLONE_REMOTE__"
-RCLONE_DEST_DIR="__RCLONE_DEST_DIR__"
-UPLOAD_RETRIES="__UPLOAD_RETRIES__"
-
-SEND_MESSAGE_PY="__SEND_MESSAGE_PY__"
-
 notify() {
   local msg="$1"
   if [[ -f "$SEND_MESSAGE_PY" ]]; then
@@ -88,99 +60,14 @@ hold_forever() {
   while true; do sleep 3600; done
 }
 
-echo "[$(ts)] ===== pipeline start ====="
-echo "[$(ts)] model_name: $MODEL_NAME"
-
-# 추가 (여기)
-echo "[$(ts)] RUNPOD_POD_ID='${RUNPOD_POD_ID:-}'"
-if command -v runpodctl >/dev/null 2>&1; then
-  echo "[$(ts)] runpodctl: $(command -v runpodctl)"
-  runpodctl --version || true
-else
-  echo "[$(ts)] runpodctl not found"
-fi
-
 # -----------------------
-# System deps
+# Build pipeline to run INSIDE tmux
 # -----------------------
-apt update
-apt install -y tmux rclone git wget
-
-# tmux mouse
-echo "set -g mouse on" >> ~/.tmux.conf || true
-tmux source-file ~/.tmux.conf || true
-
-# -----------------------
-# Repo setup
-# -----------------------
-cd "$WORKSPACE_ROOT"
-if [[ -d "$REPO_DIR/.git" ]]; then
-  echo "[$(ts)] repo exists -> update"
-  cd "$REPO_DIR"
-  git fetch --all
-else
-  echo "[$(ts)] cloning repo"
-  git clone "$REPO_URL" "$REPO_DIR"
-  cd "$REPO_DIR"
-fi
-
-git checkout "$BRANCH"
-git pull origin "$BRANCH"
-
-# -----------------------
-# uv + venv
-# -----------------------
-# uv 설치 (standalone installer)
-# - CI/컨테이너에서는 UV_UNMANAGED_INSTALL로 경로 고정 추천
-#   (설치 스크립트가 쉘 프로필을 건드리지 않게)  :contentReference[oaicite:0]{index=0}
-if ! command -v uv >/dev/null 2>&1; then
-  echo "[$(ts)] installing uv"
-  apt update
-  apt install -y curl ca-certificates
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="/usr/local/bin" sh
-fi
-echo "[$(ts)] uv: $(command -v uv)"
-uv --version
-
-# venv 생성 (python 3.12)
-# uv는 .venv를 기본으로 사용하고, 필요하면 Python도 내려받을 수 있음 :contentReference[oaicite:1]{index=1}
-cd "$REPO_DIR"
-uv venv --python 3.12
-
-# 활성화(이후 python/pip 대신 uv pip 써도 되지만,
-# notify()에서 python을 쓰니 활성화해두면 안전)
-source .venv/bin/activate
-
-# -----------------------
-# Python deps
-# -----------------------
-# 1) torch/torchvision
-# PyTorch는 가속기별 빌드/별도 인덱스가 흔함(예: cu121, cpu 등) :contentReference[oaicite:2]{index=2}
-# - 가장 단순: 기본 인덱스로 설치
-# uv pip install torch torchvision
-
-# (옵션) CUDA 인덱스를 명시하고 싶으면 예시:
-# uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# 2) torch_geometric
-# PyG는 최소 설치는 `torch_geometric`만으로 가능(추가 확장 라이브러리는 선택) :contentReference[oaicite:3]{index=3}
-uv pip install torch_geometric
-
-# (옵션) 확장 라이브러리까지(휠 권장, torch/cuda 조합에 맞춰 data.pyg.org 사용) :contentReference[oaicite:4]{index=4}
-# TORCH=$(python -c "import torch; print(torch.__version__.split('+')[0])")
-# CUDA=$(python -c "import torch; print('cpu' if torch.version.cuda is None else 'cu'+torch.version.cuda.replace('.',''))")
-# uv pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
-#   -f "https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html"
-
-# 3) 프로젝트 requirements
-uv pip install -r requirements.txt
-uv pip install requests
-
-# -----------------------
-# Data download
-# -----------------------
-cd "$DATA_DIR"
-gdown "$GDOWN_FILE_ID"
+mkdir -p /root/.config/rclone
+echo "$RCLONE_CONF_B64" | base64 -d > /root/.config/rclone/rclone.conf
+PIPELINE="$(cat <<'BASH'
+set -euo pipefail
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
 # -----------------------
 # Training
