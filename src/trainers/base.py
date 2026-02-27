@@ -206,6 +206,7 @@ def run_train_loop(
 ):
     EPOCHS = kwargs["epochs"]
     decision_threshold = kwargs["decision_threshold"]
+    MODEL_NAME = kwargs.get("model_name", "Unknown")
 
     best_val = -float("inf")
     best_epoch = None
@@ -285,7 +286,7 @@ def run_train_loop(
             model, test_dataloader, criterion, decision_threshold, device, binary, edge_index
         )
 
-    result_str = f"\n[Test] Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}"
+    result_str = f"\n[Test] Model: {MODEL_NAME} Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}"
     print(result_str)
     send_discord_message(result_str)
 

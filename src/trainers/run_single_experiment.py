@@ -132,6 +132,7 @@ def run_single_experiment(cfg,
         decision_threshold=cfg["train"]["decision_threshold"],
         trial=trial,
         report_metric=report_metric,
+        model_name=cfg["model"]["name"]
     )
 
     return out
