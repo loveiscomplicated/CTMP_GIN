@@ -23,6 +23,13 @@ def _run(cmd: list[str]) -> str:
     try:
         p = subprocess.run(cmd, check=True, capture_output=True, text=True)
         return p.stdout
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"[CMD NOT FOUND]\n"
+            f"cmd: {' '.join(cmd)}\n"
+            f"Is '{cmd[0]}' installed and in PATH?\n"
+            f"error: {e}\n"
+        ) from e
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
             f"[CMD FAILED]\n"

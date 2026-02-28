@@ -19,6 +19,7 @@ sqlalchemy
 
 # download raw_data
 gdown
+rclone
 
 # --- interpretability ---
 captum

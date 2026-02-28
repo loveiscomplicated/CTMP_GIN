@@ -244,12 +244,17 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
 
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True)
 
-    print("best value:", study.best_value)
-    print("best params:", study.best_params)
-
     # 결과 CSV 저장
     safe = study.study_name.replace("/", "_")
     study.trials_dataframe().to_csv(f"runs/{safe}_optuna_trials.csv", index=False)
+
+    completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    if not completed:
+        print("[WARNING] No trials completed — all were pruned or failed. Check request_mi / rclone setup.")
+        return study
+
+    print("best value:", study.best_value)
+    print("best params:", study.best_params)
 
     return study
 
