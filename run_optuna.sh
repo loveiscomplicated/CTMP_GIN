@@ -282,12 +282,57 @@ while [[ $attempt -le $UPLOAD_RETRIES ]]; do
   sleep 10
 done
 
+# --- [데이터 정리 및 백업] ---
+echo "[$(ts)] Stopping PostgreSQL and backing up data..."
+# DB 서비스 중지 (오류 무시)
+service postgresql stop || true
+
+# rsync 설치 확인
+if ! command -v rsync >/dev/null 2>&1; then
+  apt-get update && apt-get install -y rsync
+fi
+
+mkdir -p /workspace/pgdata
+
+# 실제 데이터 경로 확인 (psql 실행 실패 시 기본 경로 사용)
+PG_REAL_DATA=$(psql -t -A -c "SHOW data_directory;" 2>/dev/null || echo "/var/lib/postgresql/14/main")
+
+# 경로가 존재하는지 확인 후 rsync 실행
+if [[ -d "$PG_REAL_DATA" ]]; then
+  echo "[$(ts)] Syncing from $PG_REAL_DATA to /workspace/pgdata..."
+  rsync -av --no-owner --no-group "$PG_REAL_DATA/" /workspace/pgdata/
+  tar -czf /workspace/pgdata_backup.tar.gz -C /workspace pgdata
+else
+  echo "[$(ts)] Warning: PG_REAL_DATA ($PG_REAL_DATA) not found. Skipping DB backup."
+fi
+
 if [[ $ok -eq 0 ]]; then
   notify "[UPLOAD_FAIL] Upload failed after ${UPLOAD_RETRIES} attempts. Holding without shutdown."
   hold_forever
 else
   notify "[UPLOAD_OK] Upload succeeded. archive=${STUDY_NAME}.tar.gz"
+  echo "[$(ts)] shutting down..."
+  # -----------------------
+  # Stop/Terminate pod (RunPod-native)
+  # -----------------------
+  echo "[$(ts)] stopping pod via runpodctl..."
+
+  if command -v runpodctl >/dev/null 2>&1 && [[ -n "${RUNPOD_POD_ID:-}" ]]; then
+    # 1) stop (보통 과금 멈추는 목적이면 이걸 우선)
+    runpodctl stop pod "$RUNPOD_POD_ID" && exit 0
+
+    # 2) stop이 안 되면 remove(terminate) 시도
+    runpodctl remove pod "$RUNPOD_POD_ID" && exit 0
+
+    echo "[$(ts)] runpodctl stop/remove failed; falling back to process exit."
+  fi
+
+  # fallback: 컨테이너 프로세스 종료 (환경에 따라 pod가 내려갈 수도/아닐 수도)
+  kill -TERM 1 || true
+  exit 0
 fi
+
+
 BASH
 )"
 
