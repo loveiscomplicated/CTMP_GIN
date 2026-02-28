@@ -16,7 +16,6 @@ CONFIG_PATH="$2"
 echo "model_name: ${MODEL_NAME}"
 echo "config    : ${CONFIG_PATH}"
 
-
 # -----------------------
 # Constants
 # -----------------------
@@ -37,6 +36,10 @@ GDOWN_FILE_ID="1T1oYAsdYDcdqUckd7CBzBWj9RnwGrEZg"
 RCLONE_REMOTE="gdrive"
 RCLONE_DEST_DIR="CTMP_GIN_runs"
 UPLOAD_RETRIES=3
+RCLONE_B64_FILE="/tmp/rclone_conf.b64"
+if [[ -n "${RCLONE_CONF_B64:-}" ]]; then
+  printf "%s" "$RCLONE_CONF_B64" > "$RCLONE_B64_FILE"
+fi
 
 # notifier
 SEND_MESSAGE_PY="${REPO_DIR}/src/utils/send_message.py"
@@ -74,6 +77,7 @@ MODEL_NAME="__MODEL_NAME__"
 CONFIG_PATH="__CONFIG_PATH__"
 EPOCHS="__EPOCHS__"
 TOTAL_TRIALS="__TOTAL_TRIALS__"
+RCLONE_B64_FILE="__RCLONE_B64_FILE__"
 
 WORKSPACE_ROOT="__WORKSPACE_ROOT__"
 REPO_URL="__REPO_URL__"
@@ -95,9 +99,6 @@ UPLOAD_RETRIES="__UPLOAD_RETRIES__"
 SEND_MESSAGE_PY="__SEND_MESSAGE_PY__"
 BOT_NAME="runpod_optuna_${MODEL_NAME}"
 
-cd "$REPO_DIR"
-bash setup.sh
-
 notify() {
   local msg="$1"
   if [[ -f "$SEND_MESSAGE_PY" ]]; then
@@ -111,6 +112,11 @@ hold_forever() {
   echo "[$(ts)] holding forever..."
   while true; do sleep 3600; done
 }
+
+cd "$REPO_DIR"
+bash setup.sh
+
+
 # -----------------------
 # Training (Parallel Optuna workers: 1 worker per GPU)
 # -----------------------
@@ -191,7 +197,6 @@ for i in "${!GPU_IDS[@]}"; do
     --n-trials "$PER_WORKER" \
     --epochs "$EPOCHS" \
     > "${LOG_DIR}/worker_${i}.log" 2>&1 &
-
   pids+=("$!")
 done
 
@@ -213,12 +218,12 @@ fi
 #   - upload fails => notify + HOLD (no shutdown)
 # -----------------------
 mkdir -p /root/.config/rclone
-if [[ -z "${RCLONE_CONF_B64:-}" ]]; then
-  notify "[UPLOAD_FAIL] RCLONE_CONF_B64 not set. Holding without shutdown."
+if [[ ! -f "$RCLONE_B64_FILE" ]]; then
+  notify "[UPLOAD_FAIL] $RCLONE_B64_FILE missing. Holding without shutdown."
   hold_forever
 fi
 
-if ! echo "$RCLONE_CONF_B64" | base64 -d > /root/.config/rclone/rclone.conf; then
+if ! base64 -d "$RCLONE_B64_FILE" > /root/.config/rclone/rclone.conf; then
   notify "[UPLOAD_FAIL] base64 decode failed. Holding without shutdown."
   hold_forever
 fi
@@ -266,6 +271,7 @@ PIPELINE="${PIPELINE//__DATA_DIR__/${DATA_DIR}}"
 PIPELINE="${PIPELINE//__GDOWN_FILE_ID__/${GDOWN_FILE_ID}}"
 PIPELINE="${PIPELINE//__RCLONE_REMOTE__/${RCLONE_REMOTE}}"
 PIPELINE="${PIPELINE//__RCLONE_DEST_DIR__/${RCLONE_DEST_DIR}}"
+PIPELINE="${PIPELINE//__RCLONE_B64_FILE__/${RCLONE_B64_FILE}}"
 PIPELINE="${PIPELINE//__UPLOAD_RETRIES__/${UPLOAD_RETRIES}}"
 PIPELINE="${PIPELINE//__SEND_MESSAGE_PY__/${SEND_MESSAGE_PY}}"
 PIPELINE="${PIPELINE//__EPOCHS__/${EPOCHS}}"
@@ -284,8 +290,7 @@ if tmux has-session -t "${MODEL_NAME}" 2>/dev/null; then
 else
   echo "[$(ts)] creating tmux session: ${MODEL_NAME}"
   tmux new-session -d -s "${MODEL_NAME}"
-fi
-
+  
 PIPE_PATH="/tmp/${MODEL_NAME}__pipeline.sh"
 printf "%s" "$PIPELINE" > "$PIPE_PATH"
 chmod +x "$PIPE_PATH"
