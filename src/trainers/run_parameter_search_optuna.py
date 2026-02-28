@@ -12,9 +12,10 @@ from typing import Optional
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=str, required=True)
+    p.add_argument("--init-only", action="store_true", help="Initialize DB and exit")
     p.add_argument("--study-name", type=str, default=None)
     p.add_argument("--n-trials", type=int, default=None)
-    p.add_argument("--epochs", type=int, default=None)  # 선택(쓰고 싶으면)
+    p.add_argument("--epochs", type=int, default=None)  
     return p.parse_args()
 
 
@@ -262,8 +263,9 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
 if __name__ == "__main__":
     args = parse_args()
 
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    root = os.path.join(repo_root, "data")
+    cur_dir = os.path.dirname(__file__)
+    root = os.path.join(cur_dir, '..', 'data')
+    root = os.path.abspath(root)
 
     config_path = os.path.abspath(args.config)
 
@@ -271,10 +273,20 @@ if __name__ == "__main__":
     n_trials = args.n_trials if args.n_trials is not None else 50
     epochs = args.epochs if args.epochs is not None else 20
 
-    run_optuna(
-        config_path=config_path,
-        root=root,
-        n_trials=n_trials,
-        epochs=epochs,
-        study_name=args.study_name,
-    )
+    if args.init_only:
+        print(f"[*] Initializing study: {args.study_name}")
+        optuna.create_study(
+            study_name=args.study_name,
+            storage="postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db",
+            direction="maximize",
+            load_if_exists=True
+        )
+        print("[+] Initialization complete.")
+    else:
+        run_optuna(
+            config_path=config_path,
+            root=root,
+            n_trials=args.n_trials or 50,
+            epochs=args.epochs or 20,
+            study_name=args.study_name,
+        )

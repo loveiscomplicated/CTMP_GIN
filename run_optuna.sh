@@ -130,7 +130,6 @@ hold_forever() {
 cd "$REPO_DIR"
 bash setup.sh
 
-
 # -----------------------
 # Training (Parallel Optuna workers: 1 worker per GPU)
 # -----------------------
@@ -200,10 +199,15 @@ mkdir -p "$LOG_DIR"
 pids=()
 rc=0
 
+echo "[$(ts)] initializing optuna study schema..."
+python -m src.trainers.run_parameter_search_optuna \
+    --config "$CONFIG_PATH" \
+    --study-name "$STUDY_NAME" \
+    --init-only
+
 for i in "${!GPU_IDS[@]}"; do
   gpu="${GPU_IDS[$i]}"
   echo "[$(ts)] start worker $i on GPU $gpu"
-
   CUDA_VISIBLE_DEVICES="$gpu" \
   python -m src.trainers.run_parameter_search_optuna \
     --config "$CONFIG_PATH" \
