@@ -97,7 +97,6 @@ BOT_NAME="runpod_optuna_${MODEL_NAME}"
 
 cd "$REPO_DIR"
 bash setup.sh
-bash postgres.sh
 
 notify() {
   local msg="$1"
@@ -124,6 +123,8 @@ if [[ -f "$CONDA_SH" ]]; then
   source "$CONDA_SH"
   conda activate "$ENV_NAME"
 fi
+
+bash postgres.sh
 
 # (B) Wait for Postgres to be ready (if you run postgres locally)
 # change port/user/db as your postgres.sh uses
