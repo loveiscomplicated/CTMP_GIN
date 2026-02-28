@@ -130,6 +130,15 @@ hold_forever() {
 cd "$REPO_DIR"
 bash setup.sh
 
+echo "[$(ts)] Setting up rclone config before training..."
+mkdir -p /root/.config/rclone
+if [[ -f "$RCLONE_B64_FILE" ]]; then
+  base64 -d "$RCLONE_B64_FILE" > /root/.config/rclone/rclone.conf
+  echo "[$(ts)] rclone.conf created."
+else
+  echo "[$(ts)] Warning: RCLONE_B64_FILE not found at this stage!"
+fi
+
 # -----------------------
 # Training (Parallel Optuna workers: 1 worker per GPU)
 # -----------------------
@@ -235,16 +244,6 @@ fi
 # Upload runs (always try) + retry policy C
 #   - upload fails => notify + HOLD (no shutdown)
 # -----------------------
-mkdir -p /root/.config/rclone
-if [[ ! -f "$RCLONE_B64_FILE" ]]; then
-  notify "[UPLOAD_FAIL] $RCLONE_B64_FILE missing. Holding without shutdown."
-  hold_forever
-fi
-
-if ! base64 -d "$RCLONE_B64_FILE" > /root/.config/rclone/rclone.conf; then
-  notify "[UPLOAD_FAIL] base64 decode failed. Holding without shutdown."
-  hold_forever
-fi
 
 attempt=1
 ok=0
