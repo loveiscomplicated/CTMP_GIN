@@ -244,28 +244,45 @@ fi
 
 attempt=1
 ok=0
+
+ARCHIVE="/tmp/${STUDY_NAME}.tar.gz"
+
 while [[ $attempt -le $UPLOAD_RETRIES ]]; do
   echo "[$(ts)] upload attempt $attempt/$UPLOAD_RETRIES ..."
-  if rclone copy "$RUNS_DIR" "${RCLONE_REMOTE}:${RCLONE_DEST_DIR}" \
-      --create-empty-src-dirs \
-      --transfers 8 \
-      --checkers 16 \
+
+  if [[ ! -d "$RUNS_DIR/optuna_logs/$STUDY_NAME" ]]; then
+    notify "[UPLOAD_FAIL] log dir missing: $RUNS_DIR/optuna_logs/$STUDY_NAME"
+    hold_forever
+  fi
+
+  # 1) archive 만들기 (매번 새로)
+  rm -f "$ARCHIVE"
+  tar -czf "$ARCHIVE" -C "$RUNS_DIR" "optuna_logs/$STUDY_NAME"
+
+  # 2) 업로드 (rclone 옵션은 여기!)
+  if rclone copyto "$ARCHIVE" "${RCLONE_REMOTE}:${RCLONE_DEST_DIR}/${STUDY_NAME}.tar.gz" \
+      --transfers 2 \
+      --checkers 4 \
+      --tpslimit 5 \
+      --tpslimit-burst 5 \
+      --drive-chunk-size 32M \
       --retries 3 \
-      --low-level-retries 10 \
+      --low-level-retries 5 \
       --stats 10s
   then
     ok=1
     break
   fi
+
   attempt=$((attempt+1))
-  sleep 5
+  sleep 10
 done
 
 if [[ $ok -eq 0 ]]; then
   notify "[UPLOAD_FAIL] Upload failed after ${UPLOAD_RETRIES} attempts. Holding without shutdown."
   hold_forever
 else
-  notify "[UPLOAD_OK] Upload succeeded. model=$MODEL_NAME config=$CONFIG_PATH"
+  notify "[UPLOAD_OK] Upload succeeded. archive=${STUDY_NAME}.tar.gz"
 fi
 BASH
 )"
