@@ -6,7 +6,7 @@ from src.data_processing.edge import fully_connected_edge_index_batched, mi_edge
 from src.models.ctmp_gin import CTMPGIN
 from src.models.gin import GIN
 from src.models.gingru import GinGru, GinGru_2_Point
-from src.models.a3tgcn import A3TGCN_manual
+from src.models.a3tgcn import A3TGCN_manual, A3TGCN_2_points
 
 import torch
 MODEL_REGISTRY = {
@@ -15,6 +15,7 @@ MODEL_REGISTRY = {
     "gin_gru": GinGru,
     "gin_gru_2_points": GinGru_2_Point,
     "a3tgcn": A3TGCN_manual,
+    "a3tgcn_2_points": A3TGCN_2_points,
 }
 
 def build_model(model_name: str, **kwargs):

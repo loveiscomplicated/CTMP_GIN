@@ -68,6 +68,9 @@ def run_single_experiment(cfg,
     if cfg["model"]["name"] == "a3tgcn":
         cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
 
+    if cfg["model"]["name"] == "a3tgcn_2_points":
+        cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
+
     # build model
     model = build_model(
         model_name=cfg["model"]["name"],
