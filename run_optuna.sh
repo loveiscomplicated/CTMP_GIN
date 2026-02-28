@@ -16,8 +16,6 @@ CONFIG_PATH="$2"
 echo "model_name: ${MODEL_NAME}"
 echo "config    : ${CONFIG_PATH}"
 
-bash setup.sh
-bash postgres.sh
 
 # -----------------------
 # Constants
@@ -42,7 +40,10 @@ UPLOAD_RETRIES=3
 
 # notifier
 SEND_MESSAGE_PY="${REPO_DIR}/src/utils/send_message.py"
-BOT_NAME="runpod_optuna_$MODEL_NAME"
+BOT_NAME="runpod_optuna_${MODEL_NAME}"
+
+EPOCHS="${EPOCHS:-20}"
+TOTAL_TRIALS="${TOTAL_TRIALS:-50}"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
@@ -64,25 +65,144 @@ hold_forever() {
 # Build pipeline to run INSIDE tmux
 # -----------------------
 mkdir -p /root/.config/rclone
-echo "$RCLONE_CONF_B64" | base64 -d > /root/.config/rclone/rclone.conf
+
 PIPELINE="$(cat <<'BASH'
+
+bash setup.sh
+bash postgres.sh
+
 set -euo pipefail
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
+MODEL_NAME="__MODEL_NAME__"
+CONFIG_PATH="__CONFIG_PATH__"
+EPOCHS="__EPOCHS__"
+TOTAL_TRIALS="__TOTAL_TRIALS__"
+
+WORKSPACE_ROOT="__WORKSPACE_ROOT__"
+REPO_URL="__REPO_URL__"
+REPO_DIR="__REPO_DIR__"
+BRANCH="__BRANCH__"
+
+CONDA_DIR="__CONDA_DIR__"
+CONDA_SH="__CONDA_SH__"
+ENV_NAME="__ENV_NAME__"
+
+RUNS_DIR="__RUNS_DIR__"
+DATA_DIR="__DATA_DIR__"
+GDOWN_FILE_ID="__GDOWN_FILE_ID__"
+
+RCLONE_REMOTE="__RCLONE_REMOTE__"
+RCLONE_DEST_DIR="__RCLONE_DEST_DIR__"
+UPLOAD_RETRIES="__UPLOAD_RETRIES__"
+
+SEND_MESSAGE_PY="__SEND_MESSAGE_PY__"
+BOT_NAME="runpod_optuna_${MODEL_NAME}"
+
+notify() {
+  local msg="$1"
+  if [[ -f "$SEND_MESSAGE_PY" ]]; then
+    python "$SEND_MESSAGE_PY" "$msg" "$BOT_NAME" || true
+  else
+    echo "[$(ts)] send_message.py not found: $SEND_MESSAGE_PY"
+  fi
+}
+
+hold_forever() {
+  echo "[$(ts)] holding forever..."
+  while true; do sleep 3600; done
+}
 # -----------------------
-# Training
+# Training (Parallel Optuna workers: 1 worker per GPU)
 # -----------------------
 cd "$REPO_DIR"
-echo "[$(ts)] training start"
-set +e
-python -m src.trainers.runpod_optuna --config "$CONFIG_PATH"
-TRAIN_RC=$?
-set -e
+echo "[$(ts)] training start (parallel optuna workers)"
 
-if [[ $TRAIN_RC -eq 0 ]]; then
-  notify "[SUCCESS] Training completed. model=$MODEL_NAME config=$CONFIG_PATH"
+# (A) Ensure env (conda example)
+if [[ -f "$CONDA_SH" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONDA_SH"
+  conda activate "$ENV_NAME"
+fi
+
+# (B) Wait for Postgres to be ready (if you run postgres locally)
+# change port/user/db as your postgres.sh uses
+for k in {1..60}; do
+  if command -v pg_isready >/dev/null 2>&1; then
+    if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+      echo "[$(ts)] postgres is ready"
+      break
+    fi
+  else
+    # fallback: try TCP connect check
+    (echo >/dev/tcp/127.0.0.1/5432) >/dev/null 2>&1 && { echo "[$(ts)] postgres is reachable"; break; }
+  fi
+  sleep 1
+  if [[ "$k" -eq 60 ]]; then
+    notify "[FAIL] Postgres not ready after 60s. Holding."
+    hold_forever
+  fi
+done
+
+# (C) Detect GPUs
+if command -v nvidia-smi >/dev/null 2>&1; then
+  GPU_COUNT="$(nvidia-smi -L | wc -l | tr -d ' ')"
 else
-  notify "[FAIL] Training failed (rc=$TRAIN_RC). model=$MODEL_NAME config=$CONFIG_PATH"
+  GPU_COUNT=1
+fi
+if [[ "$GPU_COUNT" -lt 1 ]]; then GPU_COUNT=1; fi
+
+GPU_IDS=()
+for ((g=0; g<GPU_COUNT; g++)); do GPU_IDS+=("$g"); done
+echo "[$(ts)] detected GPUs: ${GPU_IDS[*]}"
+
+# (D) Avoid CPU oversubscription
+export OMP_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+
+# (E) Unique study name per (model, config) to avoid mixing
+CFG_BASENAME="$(basename "$CONFIG_PATH")"
+STUDY_NAME="${MODEL_NAME}__${CFG_BASENAME%.*}"
+
+# (F) Total trials control (set TOTAL_TRIALS via env var; default 50)
+WORKERS="${#GPU_IDS[@]}"
+# ceil division: per_worker = (TOTAL_TRIALS + WORKERS - 1) / WORKERS
+PER_WORKER=$(( (TOTAL_TRIALS + WORKERS - 1) / WORKERS ))
+echo "[$(ts)] total_trials=$TOTAL_TRIALS workers=$WORKERS per_worker=$PER_WORKER study_name=$STUDY_NAME"
+
+# (G) Logs into runs for upload/debug
+LOG_DIR="${RUNS_DIR}/optuna_logs/${STUDY_NAME}"
+mkdir -p "$LOG_DIR"
+
+pids=()
+rc=0
+
+for i in "${!GPU_IDS[@]}"; do
+  gpu="${GPU_IDS[$i]}"
+  echo "[$(ts)] start worker $i on GPU $gpu"
+
+  CUDA_VISIBLE_DEVICES="$gpu" \
+  python -m src.trainers.run_parameter_search_optuna \
+    --config "$CONFIG_PATH" \
+    --study-name "$STUDY_NAME" \
+    --n-trials "$PER_WORKER" \
+    --epochs "$EPOCHS" \
+    > "${LOG_DIR}/worker_${i}.log" 2>&1 &
+
+  pids+=("$!")
+done
+
+for pid in "${pids[@]}"; do
+  if ! wait "$pid"; then
+    rc=1
+  fi
+done
+
+TRAIN_RC="$rc"
+if [[ "$TRAIN_RC" -eq 0 ]]; then
+  notify "[SUCCESS] Training completed. workers=$WORKERS study=$STUDY_NAME model=$MODEL_NAME config=$CONFIG_PATH total_trials=$TOTAL_TRIALS"
+else
+  notify "[FAIL] Training failed (some workers failed). workers=$WORKERS study=$STUDY_NAME model=$MODEL_NAME config=$CONFIG_PATH"
 fi
 
 # -----------------------
@@ -95,7 +215,10 @@ if [[ -z "${RCLONE_CONF_B64:-}" ]]; then
   hold_forever
 fi
 
-echo "$RCLONE_CONF_B64" | base64 -d > /root/.config/rclone/rclone.conf
+if ! echo "$RCLONE_CONF_B64" | base64 -d > /root/.config/rclone/rclone.conf; then
+  notify "[UPLOAD_FAIL] base64 decode failed. Holding without shutdown."
+  hold_forever
+fi
 
 attempt=1
 ok=0
@@ -116,30 +239,11 @@ while [[ $attempt -le $UPLOAD_RETRIES ]]; do
   sleep 5
 done
 
-if [[ $ok -eq 1 ]]; then
-  notify "[SUCCESS] Upload completed: ${RCLONE_REMOTE}:${RCLONE_DEST_DIR}"
-  echo "[$(ts)] shutting down..."
-  # -----------------------
-  # Stop/Terminate pod (RunPod-native)
-  # -----------------------
-  echo "[$(ts)] stopping pod via runpodctl..."
-
-  if command -v runpodctl >/dev/null 2>&1 && [[ -n "${RUNPOD_POD_ID:-}" ]]; then
-    # 1) stop (보통 과금 멈추는 목적이면 이걸 우선)
-    runpodctl stop pod "$RUNPOD_POD_ID" && exit 0
-
-    # 2) stop이 안 되면 remove(terminate) 시도
-    runpodctl remove pod "$RUNPOD_POD_ID" && exit 0
-
-    echo "[$(ts)] runpodctl stop/remove failed; falling back to process exit."
-  fi
-
-  # fallback: 컨테이너 프로세스 종료 (환경에 따라 pod가 내려갈 수도/아닐 수도)
-  kill -TERM 1 || true
-  exit 0
-else
+if [[ $ok -eq 0 ]]; then
   notify "[UPLOAD_FAIL] Upload failed after ${UPLOAD_RETRIES} attempts. Holding without shutdown."
   hold_forever
+else
+  notify "[UPLOAD_OK] Upload succeeded. model=$MODEL_NAME config=$CONFIG_PATH"
 fi
 BASH
 )"
@@ -161,13 +265,16 @@ PIPELINE="${PIPELINE//__RCLONE_REMOTE__/${RCLONE_REMOTE}}"
 PIPELINE="${PIPELINE//__RCLONE_DEST_DIR__/${RCLONE_DEST_DIR}}"
 PIPELINE="${PIPELINE//__UPLOAD_RETRIES__/${UPLOAD_RETRIES}}"
 PIPELINE="${PIPELINE//__SEND_MESSAGE_PY__/${SEND_MESSAGE_PY}}"
+PIPELINE="${PIPELINE//__EPOCHS__/${EPOCHS}}"
+PIPELINE="${PIPELINE//__TOTAL_TRIALS__/${TOTAL_TRIALS}}"
 
 # -----------------------
 # tmux session: create and start
 # -----------------------
-# Ensure tmux exists BEFORE using it
-apt update
-apt install -y tmux
+if ! command -v tmux >/dev/null 2>&1; then
+  apt-get update -y
+  apt-get install -y tmux
+fi
 
 if tmux has-session -t "${MODEL_NAME}" 2>/dev/null; then
   echo "[$(ts)] tmux session exists: ${MODEL_NAME}"
@@ -180,7 +287,6 @@ PIPE_PATH="/tmp/${MODEL_NAME}__pipeline.sh"
 printf "%s" "$PIPELINE" > "$PIPE_PATH"
 chmod +x "$PIPE_PATH"
 
-# Run pipeline in that tmux session
 tmux send-keys -t "${MODEL_NAME}" "bash $PIPE_PATH" C-m
 
 echo "[$(ts)] started in tmux session '${MODEL_NAME}'."

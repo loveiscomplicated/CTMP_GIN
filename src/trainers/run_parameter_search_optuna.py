@@ -5,8 +5,18 @@ import yaml
 import random
 import torch
 import numpy as np
-
+import argparse
 from src.trainers.run_single_experiment import run_single_experiment  # 네 경로에 맞게 수정
+from typing import Optional
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--config", type=str, required=True)
+    p.add_argument("--study-name", type=str, default=None)
+    p.add_argument("--n-trials", type=int, default=None)
+    p.add_argument("--epochs", type=int, default=None)  # 선택(쓰고 싶으면)
+    return p.parse_args()
+
 
 def suggest_ctmp_gin_params(trial, cfg):
     cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
@@ -197,7 +207,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
     return objective
 
 
-def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20):
+def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20, study_name: Optional[str] = None):
 
     os.makedirs("runs", exist_ok=True)
 
@@ -215,12 +225,13 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
     ) # aggressive pruning
 
     model_name = base_cfg["model"]["name"]
+    study_name = study_name or model_name
     study = optuna.create_study(
         direction="maximize",
         sampler=sampler,
         pruner=pruner,
-        study_name=f"{model_name}",
-        storage=f"sqlite:///runs/optuna_{model_name}.db",
+        study_name=study_name,
+        storage="postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db",
         load_if_exists=True,
     )
 
@@ -231,24 +242,34 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
         objective_seeds=(1,),
     )
 
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True)
 
     print("best value:", study.best_value)
     print("best params:", study.best_params)
 
     # 결과 CSV 저장
-    study.trials_dataframe().to_csv(f"runs/{model_name}_optuna_trials.csv", index=False)
+    safe = study.study_name.replace("/", "_")
+    study.trials_dataframe().to_csv(f"runs/{safe}_optuna_trials.csv", index=False)
 
     return study
 
 
 if __name__ == "__main__":
-    cur_dir = os.path.dirname(__file__)
-    
-    config_path = os.path.join(cur_dir, '..', '..', 'configs', 'gin_gru_2_points.yaml')
-    root = os.path.join(cur_dir, '..', 'data')
-    
-    config_path = os.path.abspath(config_path)
-    root = os.path.abspath(root)
+    args = parse_args()
 
-    run_optuna(config_path=config_path, root=root, n_trials=50, epochs=20)
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    root = os.path.join(repo_root, "data")
+
+    config_path = os.path.abspath(args.config)
+
+    # CLI가 없으면 기본값 사용
+    n_trials = args.n_trials if args.n_trials is not None else 50
+    epochs = args.epochs if args.epochs is not None else 20
+
+    run_optuna(
+        config_path=config_path,
+        root=root,
+        n_trials=n_trials,
+        epochs=epochs,
+        study_name=args.study_name,
+    )

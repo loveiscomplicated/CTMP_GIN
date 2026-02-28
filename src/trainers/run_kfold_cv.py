@@ -23,6 +23,84 @@ from src.trainers.utils.early_stopper import EarlyStopper
 def ensure_dir(path: str):
     os.makedirs(path, exist_ok=False)
 
+
+def run_fold_experiment(
+    cfg: dict,
+    root: str,
+    dataset,
+    train_idx,
+    val_idx,
+    test_idx,
+    mi_cache_path=None,
+    trial=None,
+    report_metric: str = "valid_auc",
+) -> dict:
+    """
+    전달받은 index로 1회 학습+평가. dataset은 호출자가 미리 로드.
+    """
+    seed = cfg["train"].get("seed", 42)
+    set_seed(seed)
+    device = device_set(cfg["device"])
+
+    cfg["model"]["params"]["col_info"] = dataset.col_info
+    cfg["model"]["params"]["num_classes"] = dataset.num_classes
+    cfg["model"]["params"]["device"] = device
+
+    num_nodes = len(dataset.col_info[2])
+    if cfg["model"]["name"] == "gin":
+        num_nodes = len(dataset.col_info[0]) + 1
+
+    train_loader, val_loader, test_loader = make_loaders(
+        dataset=dataset,
+        train_idx=train_idx, val_idx=val_idx, test_idx=test_idx,
+        batch_size=cfg["train"]["batch_size"],
+        num_workers=cfg["train"]["num_workers"],
+        drop_last=True,
+    )
+    train_df = dataset.processed_df.iloc[train_idx]
+
+    if cfg["model"]["name"] == "xgboost":
+        from src.models.xgboost import train_xgboost
+        return train_xgboost(train_idx, val_idx, test_idx, dataset.processed_df, None, cfg)
+
+    if cfg["model"]["name"] == "a3tgcn":
+        cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
+
+    model = build_model(model_name=cfg["model"]["name"], **cfg["model"].get("params", {}))
+    model = model.to(device)
+
+    if mi_cache_path is not None:
+        cfg["edge"]["cache_path"] = mi_cache_path
+
+    edge_index = build_edge(
+        model_name=cfg["model"]["name"], root=root, seed=seed,
+        train_df=train_df, num_nodes=num_nodes,
+        batch_size=cfg["train"]["batch_size"], **cfg.get("edge", {}),
+    )
+    edge_index = edge_index.to(device)  # type: ignore
+
+    criterion = nn.BCEWithLogitsLoss() if cfg["train"]["binary"] else nn.CrossEntropyLoss()
+
+    if cfg["train"].get("optimizer", "adam") == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(),
+            lr=cfg["train"]["learning_rate"], weight_decay=cfg["train"].get("weight_decay", 0.0))
+    else:
+        optimizer = torch.optim.Adam(model.parameters(),
+            lr=cfg["train"]["learning_rate"], weight_decay=cfg["train"].get("weight_decay", 0.0))
+
+    scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
+    early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
+
+    return run_train_loop(
+        model=model, edge_index=edge_index, binary=cfg["train"]["binary"],
+        train_dataloader=train_loader, val_dataloader=val_loader, test_dataloader=test_loader,
+        criterion=criterion, optimizer=optimizer, scheduler=scheduler, early_stopper=early_stopper,
+        device=device, logger=None, epochs=cfg["train"]["epochs"],
+        decision_threshold=cfg["train"]["decision_threshold"],
+        trial=trial, report_metric=report_metric, model_name=cfg["model"]["name"],
+    )
+
+
 def run_kfold_experiment(cfg, root):
     K = cfg["train"]["n_folds"]
     test_ratio = cfg["train"]["test_ratio"]

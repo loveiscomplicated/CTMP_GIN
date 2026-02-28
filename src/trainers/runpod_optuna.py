@@ -7,12 +7,16 @@ import torch
 import numpy as np
 import argparse
 from pathlib import Path
-from src.trainers.run_single_experiment import run_single_experiment  
+from src.trainers.run_single_experiment import run_single_experiment
 from scripts.request_mi import request_mi
+from src.data_processing.splits import kfold_stratified
+from src.data_processing.tensor_dataset import TEDSTensorDataset
+from src.trainers.run_kfold_cv import run_fold_experiment
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=str, required=True) # config file location
+    p.add_argument("--outer_fold", type=int, default=-1)  # -1이면 전체, 0~(outer_k-1)이면 해당 fold만
     return p.parse_args()
 
 def load_yaml(path: str) -> dict:
@@ -88,7 +92,7 @@ def suggest_gin_gru_params(trial, cfg):
     cfg["model"]["params"]["gin_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
     cfg["model"]["params"]["gin_layers"] = trial.suggest_int("gin_layers", 1, 6)
     cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
-    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gru_hidden_channel", [16, 32, 64, 96])
     cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
 
     cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
@@ -109,7 +113,7 @@ def suggest_gin_gru_2_points_params(trial, cfg):
     cfg["model"]["params"]["gin_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
     cfg["model"]["params"]["gin_layers"] = trial.suggest_int("gin_layers", 1, 6)
     cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
-    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gru_hidden_channel", [16, 32, 64, 96])
     cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
     cfg["model"]["params"]["gin_layer_out_dropout_p"] = trial.suggest_float("gin_layer_out_dropout_p", 0.0, 0.5)
     cfg["model"]["params"]["gru_layer_out_dropout_p"] = trial.suggest_float("gru_layer_out_dropout_p", 0.0, 0.5)
@@ -249,7 +253,7 @@ def run_optuna(base_cfg, root: str, n_trials: int = 50, epochs: int = 20):
         objective_seeds=(1,),
     )
 
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
     print("best value:", study.best_value)
     print("best params:", study.best_params)
@@ -290,25 +294,22 @@ def _score_from_out(out: dict, model_name: str) -> float:
 def inner_objective_factory(
     base_cfg: dict,
     root: str,
+    dataset,
+    labels: np.ndarray,
     outer_fold: int,
-    inner_folds: list[int],
+    outer_train_idx: np.ndarray,
+    outer_test_idx: np.ndarray,
+    inner_k: int,
+    split_seed: int,
     report_metric: str,
     objective_seeds: tuple[int, ...],
 ):
     """
     inner CV 평균 성능을 maximize 하는 objective.
-
-    중요:
-    - 'inner fold'는 반드시 'outer train' 데이터에서만 나뉘어야 합니다.
-    - 이 스크립트는 cfg에 outer/inner fold 정보를 심어주고,
-      실제 split은 run_single_experiment 내부가 수행한다고 가정합니다.
-
-    run_single_experiment 쪽에서 아래 키들을 읽도록 맞춰주세요:
-      cfg["cv"]["outer_fold"], cfg["cv"]["inner_fold"], cfg["cv"]["outer_k"], cfg["cv"]["inner_k"]
-      cfg["cv"]["mode"] in {"inner", "outer_eval", "outer_fit"} 등
+    outer_train_idx에서 kfold_stratified로 inner split을 직접 생성하므로
+    각 inner fold가 서로 다른 데이터로 학습/평가된다.
     """
     def objective(trial: optuna.Trial):
-        # trial 고정 seed(재현성)
         trial_seed = 10000 + trial.number
         set_global_seed(trial_seed)
 
@@ -320,34 +321,28 @@ def inner_objective_factory(
         PARAM_SUGGESTORS[model_name](trial, cfg)
 
         fold_scores = []
-        for inner_fold in inner_folds:
+        for inner_fold, inner_train_idx, inner_val_idx in kfold_stratified(
+            outer_train_idx, labels, n_folds=inner_k, seed=split_seed
+        ):
             for seed in objective_seeds:
                 cfg_s = copy.deepcopy(cfg)
                 cfg_s["train"]["seed"] = int(seed)
 
-                # nested CV 메타정보 주입
-                cfg_s.setdefault("cv", {})
-                cfg_s["cv"]["outer_fold"] = int(outer_fold)
-                cfg_s["cv"]["inner_fold"] = int(inner_fold)
-                cfg_s["cv"]["mode"] = "inner"  # inner-CV validate
-
                 try:
-                    # MI 캐시도 fold 단위로 분리(권장)
                     mi_cache_path = request_mi(
                         mode="cv",
                         fold=int(inner_fold),
                         seed=seed,
                         cfg=cfg_s,
-                        n_neighbors=cfg_s["edge"]["n_neighbors"]
+                        n_neighbors=cfg_s["edge"]["n_neighbors"],
                     )
 
-                    out = run_single_experiment(
-                        cfg_s,
-                        root=root,
+                    out = run_fold_experiment(
+                        cfg_s, root, dataset,
+                        inner_train_idx, inner_val_idx, outer_test_idx,
+                        mi_cache_path=mi_cache_path,
                         trial=trial,
                         report_metric=report_metric,
-                        edge_cached=True,
-                        mi_cache_path=mi_cache_path,
                     )
 
                     score = _score_from_out(out, model_name)
@@ -376,11 +371,12 @@ def run_nested_cv_optuna(
     epochs: int = 20,
     report_metric: str = "valid_auc",
     objective_seeds: tuple[int, ...] = (1,),
+    split_seed: int = 42,
+    selected_outer_fold: int = -1, 
 ):
     runs_dir = ensure_runs_dir()
     model_name = base_cfg["model"]["name"]
 
-    # 공용 DB (outer fold별로 study_name만 다르게)
     storage = "postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db"
 
     sampler = optuna.samplers.TPESampler(seed=42, multivariate=True)
@@ -390,13 +386,24 @@ def run_nested_cv_optuna(
         reduction_factor=3,
     )
 
+    # 1회 dataset 로드
+    dataset = TEDSTensorDataset(
+        root=root,
+        binary=base_cfg["train"].get("binary", True),
+        ig_label=False,
+        remove_los=(model_name != "gin"),
+    )
+    labels = np.array([dataset[i][1] for i in range(len(dataset))])
+
     outer_results = []
 
-    for outer_fold in range(outer_k):
+    for outer_fold, outer_train_idx, outer_test_idx in kfold_stratified(
+        np.arange(len(dataset)), labels, n_folds=outer_k, seed=split_seed
+    ):
+        # ✅ 추가: 특정 outer_fold만 수행
+        if selected_outer_fold != -1 and outer_fold != selected_outer_fold:
+            continue
         print(f"\n===== [OUTER {outer_fold+1}/{outer_k}] inner optuna start =====")
-
-        # inner folds: 0..inner_k-1 (단, 의미는 'outer train 내부에서의 fold id')
-        inner_folds = list(range(inner_k))
 
         study_name = f"{model_name}__outer={outer_fold}"
         study = optuna.create_study(
@@ -411,18 +418,22 @@ def run_nested_cv_optuna(
         objective = inner_objective_factory(
             base_cfg=base_cfg,
             root=root,
+            dataset=dataset,
+            labels=labels,
             outer_fold=outer_fold,
-            inner_folds=inner_folds,
+            outer_train_idx=outer_train_idx,
+            outer_test_idx=outer_test_idx,
+            inner_k=inner_k,
+            split_seed=split_seed,
             report_metric=report_metric,
             objective_seeds=objective_seeds,
         )
 
-        study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
         best_params = study.best_params
         best_inner = float(study.best_value)
 
-        # inner optuna 결과 저장
         df_path = runs_dir / f"{model_name}__outer={outer_fold}__inner_trials.csv"
         study.trials_dataframe().to_csv(df_path.as_posix(), index=False)
 
@@ -434,27 +445,22 @@ def run_nested_cv_optuna(
         # -----------------------
         print(f"===== [OUTER {outer_fold+1}/{outer_k}] refit + outer-eval =====")
 
-        # best params를 base_cfg에 적용하기 위해:
-        # - Optuna가 뱉은 best_params를 "trial 없이" cfg에 세팅하는 함수가 필요.
-        #   여기서는 간단히 "고정 Trial"을 만들어 재사용합니다.
         fixed_trial = optuna.trial.FixedTrial(best_params)
         cfg_best = copy.deepcopy(base_cfg)
         if model_name not in PARAM_SUGGESTORS:
             raise ValueError(f"No suggestor registered for model: {model_name}")
         PARAM_SUGGESTORS[model_name](fixed_trial, cfg_best)
 
-        # outer fold 지정
-        cfg_best.setdefault("cv", {})
-        cfg_best["cv"]["outer_fold"] = int(outer_fold)
-        cfg_best["cv"]["mode"] = "outer_eval"  # outer test 평가 모드라고 가정
+        # refit: inner split의 첫 번째 fold를 train/val로 사용
+        _, refit_train_idx, refit_val_idx = next(
+            kfold_stratified(outer_train_idx, labels, n_folds=inner_k, seed=split_seed)
+        )
 
-        # seed 평균(원하면 여러 seed)
         outer_scores = []
         for seed in objective_seeds:
             cfg_s = copy.deepcopy(cfg_best)
             cfg_s["train"]["seed"] = int(seed)
 
-            # outer 평가에서도 MI가 필요하면 fold 기준을 outer_fold로 잡아 캐시 분리
             mi_cache_path = request_mi(
                 mode="cv",
                 fold=int(outer_fold),
@@ -463,13 +469,12 @@ def run_nested_cv_optuna(
                 n_neighbors=cfg_s["edge"]["n_neighbors"],
             )
 
-            out = run_single_experiment(
-                cfg_s,
-                root=root,
-                trial=None,  # 최종 평가는 optuna trial 불필요
-                report_metric=report_metric,
-                edge_cached=True,
+            out = run_fold_experiment(
+                cfg_s, root, dataset,
+                refit_train_idx, refit_val_idx, outer_test_idx,
                 mi_cache_path=mi_cache_path,
+                trial=None,
+                report_metric=report_metric,
             )
             score = _score_from_out(out, model_name)
             outer_scores.append(float(score))
@@ -536,6 +541,7 @@ if __name__ == "__main__":
         epochs=20,
         report_metric="valid_auc",
         objective_seeds=(1,),
+        selected_outer_fold=args.outer_fold,
     )
 
 '''if __name__ == "__main__":
