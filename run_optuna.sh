@@ -67,6 +67,7 @@ hold_forever() {
 mkdir -p /root/.config/rclone
 
 PIPELINE="$(cat <<'BASH'
+cd "$REPO_DIR"
 bash setup.sh
 bash postgres.sh
 
