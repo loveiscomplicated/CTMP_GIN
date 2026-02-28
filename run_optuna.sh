@@ -70,10 +70,6 @@ PIPELINE="$(cat <<'BASH'
 set -euo pipefail
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
-cd "$REPO_DIR"
-bash setup.sh
-bash postgres.sh
-
 MODEL_NAME="__MODEL_NAME__"
 CONFIG_PATH="__CONFIG_PATH__"
 EPOCHS="__EPOCHS__"
@@ -98,6 +94,10 @@ UPLOAD_RETRIES="__UPLOAD_RETRIES__"
 
 SEND_MESSAGE_PY="__SEND_MESSAGE_PY__"
 BOT_NAME="runpod_optuna_${MODEL_NAME}"
+
+cd "$REPO_DIR"
+bash setup.sh
+bash postgres.sh
 
 notify() {
   local msg="$1"
