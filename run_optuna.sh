@@ -126,19 +126,21 @@ fi
 
 # (B) Wait for Postgres to be ready (if you run postgres locally)
 # change port/user/db as your postgres.sh uses
-for k in {1..60}; do
+PG_HOST="${PG_HOST:-127.0.0.1}"
+PG_PORT="${PG_PORT:-5432}"
+
+for k in {1..120}; do
   if command -v pg_isready >/dev/null 2>&1; then
-    if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+    if pg_isready -h "$PG_HOST" -p "$PG_PORT" >/dev/null 2>&1; then
       echo "[$(ts)] postgres is ready"
       break
     fi
   else
-    # fallback: try TCP connect check
-    (echo >/dev/tcp/127.0.0.1/5432) >/dev/null 2>&1 && { echo "[$(ts)] postgres is reachable"; break; }
+    (echo >/dev/tcp/"$PG_HOST"/"$PG_PORT") >/dev/null 2>&1 && { echo "[$(ts)] postgres reachable"; break; }
   fi
   sleep 1
-  if [[ "$k" -eq 60 ]]; then
-    notify "[FAIL] Postgres not ready after 60s. Holding."
+  if [[ "$k" -eq 120 ]]; then
+    notify "[FAIL] Postgres not ready after 120s. Holding."
     hold_forever
   fi
 done
