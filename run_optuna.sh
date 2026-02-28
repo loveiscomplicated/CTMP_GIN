@@ -36,9 +36,23 @@ GDOWN_FILE_ID="1T1oYAsdYDcdqUckd7CBzBWj9RnwGrEZg"
 RCLONE_REMOTE="gdrive"
 RCLONE_DEST_DIR="CTMP_GIN_runs"
 UPLOAD_RETRIES=3
+
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+
 RCLONE_B64_FILE="/tmp/rclone_conf.b64"
-if [[ -n "${RCLONE_CONF_B64:-}" ]]; then
-  printf "%s" "$RCLONE_CONF_B64" > "$RCLONE_B64_FILE"
+
+# wait for env injection (up to 120s)
+for k in {1..120}; do
+  if [[ -n "${RCLONE_CONF_B64:-}" ]]; then
+    printf "%s" "$RCLONE_CONF_B64" > "$RCLONE_B64_FILE"
+    break
+  fi
+  sleep 1
+done
+
+if [[ ! -s "$RCLONE_B64_FILE" ]]; then
+  echo "[$(ts)] RCLONE_CONF_B64 still empty after 120s. Exiting."
+  exit 1
 fi
 
 # notifier
@@ -48,7 +62,7 @@ BOT_NAME="runpod_optuna_${MODEL_NAME}"
 EPOCHS="${EPOCHS:-20}"
 TOTAL_TRIALS="${TOTAL_TRIALS:-50}"
 
-ts() { date '+%Y-%m-%d %H:%M:%S'; }
+
 
 notify() {
   local msg="$1"
@@ -296,6 +310,7 @@ PIPE_PATH="/tmp/${MODEL_NAME}__pipeline.sh"
 printf "%s" "$PIPELINE" > "$PIPE_PATH"
 chmod +x "$PIPE_PATH"
 
+tmux set-environment -g RCLONE_B64_FILE "$RCLONE_B64_FILE"
 tmux send-keys -t "${MODEL_NAME}" "bash $PIPE_PATH" C-m
 
 echo "[$(ts)] started in tmux session '${MODEL_NAME}'."
