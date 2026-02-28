@@ -6,6 +6,8 @@ import random
 import torch
 import numpy as np
 import argparse
+from optuna.trial import TrialState
+import traceback
 from pathlib import Path
 from src.trainers.run_single_experiment import run_single_experiment
 from scripts.request_mi import request_mi
@@ -211,8 +213,14 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
 
             except optuna.TrialPruned:
                 raise
+            except FileNotFoundError as e:
+                print(f"[Trial {trial.number}] FileNotFoundError:", e)
+                traceback.print_exc()
+                raise  # 원인 고치기 전까지는 prune로 덮지 말고 터뜨려
+
             except Exception as e:
                 print(f"[Trial {trial.number}] failed:", repr(e))
+                traceback.print_exc()
                 raise optuna.TrialPruned()
 
         return float(sum(scores) / len(scores))
@@ -255,8 +263,12 @@ def run_optuna(base_cfg, root: str, n_trials: int = 50, epochs: int = 20):
 
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
-    print("best value:", study.best_value)
-    print("best params:", study.best_params)
+    completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
+    if len(completed) == 0:
+        print("[WARN] No completed trials. All trials failed/pruned.")
+    else:
+        print("best value:", study.best_value)
+        print("best params:", study.best_params)
 
     # 결과 CSV 저장
     study.trials_dataframe().to_csv(f"runs/{model_name}_optuna_trials.csv", index=False)
