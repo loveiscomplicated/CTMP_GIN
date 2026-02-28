@@ -1,4 +1,4 @@
-device: cpu # if null, it automatically sets the available device. (cuda | mps | cpu)
+device: null # if null, it automatically sets the available device. (cuda | mps | cpu)
             # it is often better to use cpu due to recurrent unit.
 edge:
   is_mi_based: True # if 0, it generates fully connected edge index.
