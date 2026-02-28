@@ -4,7 +4,7 @@ pandas
 pyyaml
 tqdm
 requests
-dotenv
+python-dotenv
 
 # --- science / stats ---
 scikit-learn
@@ -15,6 +15,7 @@ matplotlib
 # parameter tuning
 optuna
 psycopg2-binary
+sqlalchemy
 
 # download raw_data
 gdown
@@ -22,5 +23,5 @@ gdown
 # --- interpretability ---
 captum
 
-# database
+# experiment logger
 wandb
