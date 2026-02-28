@@ -290,7 +290,8 @@ if tmux has-session -t "${MODEL_NAME}" 2>/dev/null; then
 else
   echo "[$(ts)] creating tmux session: ${MODEL_NAME}"
   tmux new-session -d -s "${MODEL_NAME}"
-  
+fi
+
 PIPE_PATH="/tmp/${MODEL_NAME}__pipeline.sh"
 printf "%s" "$PIPELINE" > "$PIPE_PATH"
 chmod +x "$PIPE_PATH"
