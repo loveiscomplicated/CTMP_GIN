@@ -151,24 +151,23 @@ class A3TGCN_2_points(nn.Module):
         Args:
             template_edge_index(torch.Tensor): edge_index는 동일하므로 template_edge_index로 한꺼번에 전달
         '''
-        ad_idx_t = self.ad_idx_t.to(device)
-        dis_idx_t = self.dis_idx_t.to(device)
-
-        batch_size = x_batch.shape[0]
-        num_nodes = int(ad_idx_t.numel())
-
         # Embed variables: [B, V, embedding_dim]
         x_embedded = self.entity_embedding_layer(x_batch)
 
-        # Append LOS as node/variable feature: [B, V, embedding_dim + 1]
-        x_embedded = append_los_to_vars(x_embedded, LOS_batch, max_los=self.max_los_norm)
+        # Build temporal tensor: ad features for t < LOS, dis features for t >= LOS
+        # Output: [B, N, embedding_dim, 37]
+        x_temporal = to_temporal(
+            x_embedded,
+            self.ad_col_index,
+            self.dis_col_index,
+            LOS_batch,
+            device,
+            max_los=37,
+        )
 
-        # Select admission/discharge variable sets and concat along batch: [B*2, N, F]
-        x_separated = separate_x(x_embedded, ad_idx_t=ad_idx_t, dis_idx_t=dis_idx_t)
+        after_GNN = self.a3tgcn_layer(x_temporal, template_edge_index)  # [B, N, hidden_channel]
 
-        after_GNN = self.a3tgcn_layer(x_separated, template_edge_index) # [32, 60, 32]
-        
-        # global mean pooling [32, 60, 32] -> [32, 32]
+        # global mean pooling: [B, N, hidden_channel] -> [B, hidden_channel]
         mean_pooled = torch.mean(after_GNN, dim=1)
 
         return self.classifier(mean_pooled)
