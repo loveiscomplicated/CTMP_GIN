@@ -67,12 +67,12 @@ hold_forever() {
 mkdir -p /root/.config/rclone
 
 PIPELINE="$(cat <<'BASH'
+set -euo pipefail
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+
 cd "$REPO_DIR"
 bash setup.sh
 bash postgres.sh
-
-set -euo pipefail
-ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
 MODEL_NAME="__MODEL_NAME__"
 CONFIG_PATH="__CONFIG_PATH__"
