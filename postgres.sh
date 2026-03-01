@@ -53,7 +53,15 @@ need_root
 
 export DEBIAN_FRONTEND=noninteractive
 
-log "Installing PostgreSQL ${PG_VER} (if needed)..."
+log "Adding PostgreSQL Official Repository for Ubuntu $(lsb_release -cs)..."
+apt-get update -y
+apt-get install -y gnupg2 wget lsb-release --no-install-recommends
+
+# PostgreSQL 공식 GPG 키 추가 및 저장소 등록
+wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+
+log "Installing PostgreSQL ${PG_VER} from PGDG..."
 apt-get update -y
 apt-get install -y --no-install-recommends \
   "postgresql-${PG_VER}" "postgresql-contrib-${PG_VER}" \

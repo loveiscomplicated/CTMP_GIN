@@ -95,9 +95,8 @@ class GinGru_2_Point(nn.Module):
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         self.col_list, self.col_dims, ad_col_index, dis_col_index = col_info
-        # self.col_dims.append(self.max_los + 1) # LOS needs to be included in GIN, as it's excluded in col_info. --> updated: it is included in col_info
-        self.ad_idx_t = torch.tensor(ad_col_index)
-        self.dis_idx_t = torch.tensor(dis_col_index)
+        self.register_buffer('ad_idx_t', torch.tensor(ad_col_index, dtype=torch.long))
+        self.register_buffer('dis_idx_t', torch.tensor(dis_col_index, dtype=torch.long))
 
         # Entity Embedding
         self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, embedding_dim=embedding_dim)
@@ -155,23 +154,23 @@ class GinGru_2_Point(nn.Module):
         Returns:
             logits: [B, 1]
         """
-        ad_idx_t = self.ad_idx_t.to(device)
-        dis_idx_t = self.dis_idx_t.to(device)
 
         batch_size = x_batch.shape[0]
-        num_nodes = int(ad_idx_t.numel())
+        los_idx = LOS_batch.long().unsqueeze(1)
+        x_combined = torch.cat([x_batch, los_idx], dim=1) # [B, 73]
+        num_nodes = x_combined.shape[1]
 
         # Embed variables: [B, V, embedding_dim]
-        x_embedded = self.entity_embedding_layer(x_batch)
+        x_embedded = self.entity_embedding_layer(x_combined)
 
         # Append LOS as node/variable feature: [B, V, embedding_dim + 1] --> updated to making LOS as node.
         # x_embedded = append_los_to_vars(x_embedded, LOS_batch, max_los=self.max_los_norm)
 
         # Select admission/discharge variable sets and concat along batch: [B*2, N, F]
-        x_separated = separate_x(x_embedded, ad_idx_t=ad_idx_t, dis_idx_t=dis_idx_t)
-
+        x_separated = separate_x(x_embedded, ad_idx_t=self.ad_idx_t, dis_idx_t=self.dis_idx_t) # type: ignore
         # Flatten into [B*2*N, F]
-        x_after_gin = x_separated.reshape(batch_size * 2 * num_nodes, -1)
+        num_separated_nodes = int(self.ad_idx_t.numel())
+        x_after_gin = x_separated.reshape(batch_size * 2 * num_separated_nodes, -1)
 
         # Apply GIN layers, sum-pool per graph at each layer, then concat pooled outputs
         sum_pooled = []
@@ -179,7 +178,7 @@ class GinGru_2_Point(nn.Module):
             x_after_gin = layer(x_after_gin, template_edge_index)   # [B*2*N, gin_hidden_channel]
             x_after_gin = self.gin_layer_out_dropout(x_after_gin)
 
-            x_graph = x_after_gin.reshape(batch_size * 2, num_nodes, self.hidden_channel)  # [B*2, N, H]
+            x_graph = x_after_gin.reshape(batch_size * 2, num_separated_nodes, self.hidden_channel)  # [B*2, N, H]
             x_sum = torch.sum(x_graph, dim=1)  # [B*2, H]
             sum_pooled.append(x_sum)
 
