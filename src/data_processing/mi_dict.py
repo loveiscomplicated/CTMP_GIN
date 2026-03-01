@@ -140,7 +140,7 @@ def seperate_ad_dis(mi_dict: dict, ad_col_list, dis_col_list):
     return mi_ad_dict, mi_dis_dict, mi_avg_dict
 
 
-def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, cache_path: str | None = None):
+def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, remove_los=True, cache_path: str | None = None):
     """
     Load cached MI results or compute them, then split by admission/discharge.
 
@@ -170,7 +170,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, 
 
     # 2. If loading failed or cache_path was not provided, check the default path (seed-based)
     if mi_dict is None:
-        mi_dict_path = os.path.join(root, 'mi', f'mi_dict_{seed}.pickle')
+        mi_dict_path = os.path.join(root, 'mi', f'mi_dict_seed_{seed}_n_neighbors_{n_neighbors}_remove_los_{remove_los}.pickle')
         
         if os.path.exists(mi_dict_path):
             print("Loading cached file...")
@@ -181,12 +181,12 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, 
             print("Calculating MI...")
             mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors) 
 
-    ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=True)
+    ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=remove_los)
     mi_ad_dict, mi_dis_dict, mi_avg_dict = seperate_ad_dis(mi_dict=mi_dict, ad_col_list=ad_col_list, dis_col_list=dis_col_list)
     return mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict
 
 
-def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
+def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, remove_los=True):
     """
     calculate mi_dict every time.
     Args:
@@ -199,10 +199,10 @@ def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3):
         tuple: (mi_ad_dict, mi_dis_dict, mi_avg_dict)
     """
     print("Buliding Mutual Information based edge index")
-    mi_dict_path = os.path.join(root, 'mi', f'mi_dict_{seed}.pickle')
+    mi_dict_path = os.path.join(root, 'mi', f'mi_dict_seed_{seed}_n_neighbors_{n_neighbors}_remove_los_{remove_los}.pickle')
     print("Calculating MI...")
     mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors) 
 
-    ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=True)
+    ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=remove_los)
     mi_ad_dict, mi_dis_dict, mi_avg_dict = seperate_ad_dis(mi_dict=mi_dict, ad_col_list=ad_col_list, dis_col_list=dis_col_list)
     return mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict

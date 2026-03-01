@@ -69,15 +69,17 @@ def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int):
     return mi_dict
 
 
-def load_train_df(mode, fold, seed, cfg):
+def load_train_df(mode, fold, seed, cfg, remove_los):
     cur_dir = os.path.dirname(__file__)
     root = os.path.join(cur_dir, '..', 'src', 'data')
+
 
     if mode == "single":
         dataset = TEDSTensorDataset(
             root=root,
             binary=cfg["train"].get("binary", True),
             ig_label=cfg["train"].get("ig_label", False),
+            remove_los=remove_los,
         )
 
         cfg["model"]["params"]["col_info"] = dataset.col_info
@@ -142,17 +144,23 @@ def process_one_request_file(fname: str):
             print(f"Cache bypass requested for {artifact_key}. Computing MI...")
         else:
             print(f"Cache miss for {artifact_key}. Computing MI...")
-            
+        
+        remove_los = True
+        model_name = req["cfg"]["model"].get("name", None)
+        if model_name in ["gin_gru_2_points", "a3tgcn_2_points"]:
+            remove_los = False
+        
         train_df = load_train_df(
             req["mode"],
             req.get("fold"),
             req["seed"],
             req["cfg"],
+            remove_los=remove_los
         )
         mi_dict = _get_mi_helper(
             train_df,
             req["seed"],
-            req["n_neighbors"]
+            req["n_neighbors"],
         )
 
         # 계산 결과를 로컬 캐시에 저장 (다음 번에 use_cache=True인 요청이 오면 활용됨)

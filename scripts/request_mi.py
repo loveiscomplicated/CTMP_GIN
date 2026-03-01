@@ -41,13 +41,13 @@ def _run(cmd: list[str]) -> str:
         ) from e
 
 
-def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int) -> str:
+def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int, remove_los: bool=True) -> str:
     if mode == "cv":
         if fold is None:
             raise ValueError("mode=cv requires fold")
-        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__n_neighbors={n_neighbors}"
+        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__n_neighbors={n_neighbors}__remove_los={remove_los}"
     if mode == "single":
-        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__n_neighbors={n_neighbors}"
+        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__n_neighbors={n_neighbors}__remove_los={remove_los}"
     raise ValueError("mode must be 'cv' or 'single'")
 
 
@@ -138,7 +138,12 @@ def request_mi(
     Returns:
         str: local pickle path
     """
-    artifact_key = _artifact_key(mode, fold, seed, n_neighbors)
+    remove_los = True
+    model_name = cfg["model"].get("name", None)
+    if model_name in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]:
+        remove_los = False
+
+    artifact_key = _artifact_key(mode, fold, seed, n_neighbors, remove_los)
     local_pkl = LOCAL_CACHE_DIR / f"{artifact_key}.pkl"
 
     # 1) local cache hit

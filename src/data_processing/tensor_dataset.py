@@ -98,15 +98,6 @@ class TEDSTensorDataset(Dataset):
         # These two things aren't needed in training model.
         df = df.drop(['DISYR', 'CASEID'], axis=1)
 
-        # get los
-        if 'LOS' in df.columns:
-            LOS = df['LOS']
-            LOS = df_to_tensor(LOS)
-            if self.remove_los:
-                df = df.drop('LOS', axis=1)
-        else:
-            raise ValueError('No LOS variable in the raw data.')
-        
         # Prepare REASON or REASONb
         if 'REASON' not in df.columns:
             raise ValueError('No REASON variable in the raw data.')
@@ -120,8 +111,18 @@ class TEDSTensorDataset(Dataset):
             columns.remove('REASON')
             columns.append('REASON')
             df = df[columns]
+
+        # get los
+        if 'LOS' in df.columns:
+            LOS = df['LOS']
+            LOS = df_to_tensor(LOS)
+            if self.remove_los:
+                df = df.drop('LOS', axis=1)
+        else:
+            raise ValueError('No LOS variable in the raw data.')
         
-        self.processed_df = df
+        self.processed_df = df # dataframe for edge building needs los column
+
 
         # To use torch.Embedding, organizing label as successive integers is needed.
         df = organize_labels(df, self.ig_label)

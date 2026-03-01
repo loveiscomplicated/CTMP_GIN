@@ -31,11 +31,17 @@ def run_single_experiment(cfg,
 
     device = device_set(cfg["device"])
 
+    remove_los = True
+    if cfg["model"]["name"] in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]:
+        remove_los = False
+        cfg["edge"]["remove_los"] = False
+
     # create dataset
     dataset = TEDSTensorDataset(
         root=root,
         binary=cfg["train"].get("binary", True),
         ig_label=cfg["train"].get("ig_label", False),
+        remove_los=remove_los,
     )
 
     cfg["model"]["params"]["col_info"] = dataset.col_info
@@ -51,7 +57,6 @@ def run_single_experiment(cfg,
         num_nodes += 1 # add LOS as a node
     if cfg["model"]["name"] == 'a3tgcn_2_points':
         num_nodes += 1 # add LOS as a node
-    
 
     print(f"num_nodes set to {num_nodes}")
 
@@ -71,10 +76,7 @@ def run_single_experiment(cfg,
         train_idx, val_idx, test_idx = idx
         return train_xgboost(train_idx, val_idx, test_idx, dataset.processed_df, logger, cfg)
     
-    if cfg["model"]["name"] == "a3tgcn":
-        cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
-
-    if cfg["model"]["name"] == "a3tgcn_2_points":
+    if cfg["model"]["name"] in ["a3tgcn", "a3tgcn_2_points"]:
         cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
 
     # build model
@@ -84,7 +86,6 @@ def run_single_experiment(cfg,
     )
     model = model.to(device)
     total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 
     # build edge_index
     if mi_cache_path is not None:

@@ -47,9 +47,9 @@ def to_two_step_sequence(x: torch.Tensor):
     return torch.stack([ad, dis], dim=0)
 
 
-def separate_x(x: torch.Tensor, ad_idx_t: torch.Tensor, dis_idx_t: torch.Tensor):
+def dual_time_stamp(x: torch.Tensor, ad_idx_t: torch.Tensor, dis_idx_t: torch.Tensor):
     """
-    Split x into admission and discharge variables, then concat along batch dimension.
+    Split x into admission and discharge variables, then stack along a new period dimension.
 
     Args:
         x: [B, V, F]
@@ -57,38 +57,11 @@ def separate_x(x: torch.Tensor, ad_idx_t: torch.Tensor, dis_idx_t: torch.Tensor)
         dis_idx_t: [N] indices for discharge variables
 
     Returns:
-        [B*2, N, F]
+        [B, N, F, 2]
     """
     ad_tensor = torch.index_select(x, dim=1, index=ad_idx_t)   # [B, N, F]
     dis_tensor = torch.index_select(x, dim=1, index=dis_idx_t) # [B, N, F]
-    return torch.cat([ad_tensor, dis_tensor], dim=0)           # [B*2, N, F]
-
-
-def to_temporal(x_tensor: torch.Tensor, # shape: [batch_size, num_var, feature_dim] (=[32, 72, 25])
-                ad_col_index: list, 
-                dis_col_index: list,
-                LOS: torch.Tensor,
-                device,
-                max_los=37):
-    batch_size, _, num_features = x_tensor.shape
-    num_nodes = len(ad_col_index)
-
-    ad_idx_t = torch.tensor(ad_col_index, device=device)
-    dis_idx_t = torch.tensor(dis_col_index, device=device)
-
-    ad_tensor = torch.index_select(x_tensor, dim=1, index=ad_idx_t)
-    dis_tensor = torch.index_select(x_tensor, dim=1, index=dis_idx_t)
-
-    # Create a temporal mask based on LOS
-    los_mask = torch.arange(max_los, device=device).unsqueeze(0).unsqueeze(0).unsqueeze(0) < LOS.unsqueeze(1).unsqueeze(1).unsqueeze(1)
-    los_mask = los_mask.expand(batch_size, num_nodes, num_features, max_los)
-    
-    # Create the temporal tensor
-    temporal_tensor = torch.where(los_mask, ad_tensor.unsqueeze(-1), dis_tensor.unsqueeze(-1))
-
-    return temporal_tensor
-
-
+    return torch.stack([ad_tensor, dis_tensor], dim=-1)
 
 class A3TGCN_2_points(nn.Module):
     '''
@@ -133,10 +106,10 @@ class A3TGCN_2_points(nn.Module):
 
         self.a3tgcn_layer = A3TGCN2(in_channels=a3tgcn_input_channel,
                         out_channels=hidden_channel,
-                        periods=37,
+                        periods=2,
                         batch_size=batch_size,
                         device=device,
-                        cached=cached) # 이거 지이이이이이이이인짜 중요함 이걸 해야 성능이 완전 좋아짐
+                        cached=cached)
 
         # 분류기 레이어 정의
         out_dim = 1 if self.num_classes == 2 else self.num_classes
@@ -155,20 +128,18 @@ class A3TGCN_2_points(nn.Module):
         for i, dim in enumerate(self.col_dims):
             if torch.any(x_batch[:, i] >= dim):
                 raise ValueError(f"Feature {i} has value out of bounds for embedding dim {dim}")
-            
+        
+        ad_idx_t = self.ad_idx_t.to(device)
+        dis_idx_t = self.dis_idx_t.to(device)
+        
         # Embed variables: [B, V, embedding_dim]
         x_embedded = self.entity_embedding_layer(x_batch)
 
-        # Build temporal tensor: ad features for t < LOS, dis features for t >= LOS
-        # Output: [B, N, embedding_dim, 37]
-        x_temporal = to_temporal(
-            x_embedded,
-            self.ad_col_index,
-            self.dis_col_index,
-            LOS_batch,
-            device,
-            max_los=37,
-        )
+        # Append LOS as node/variable feature: [B, V, embedding_dim + 1]
+        x_embedded = append_los_to_vars(x_embedded, LOS_batch, max_los=self.max_los_norm)
+
+        # Select admission/discharge variable sets and concat along batch: [B*2, N, F]
+        x_temporal = dual_time_stamp(x_embedded, ad_idx_t=ad_idx_t, dis_idx_t=dis_idx_t)
 
         after_GNN = self.a3tgcn_layer(x_temporal, template_edge_index)  # [B, N, hidden_channel]
 

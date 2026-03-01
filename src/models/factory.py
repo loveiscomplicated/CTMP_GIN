@@ -2,7 +2,11 @@
 import pandas
 import os
 from src.data_processing.mi_dict import search_mi_dict, cv_mi_dict
-from src.data_processing.edge import fully_connected_edge_index_batched, mi_edge_index_batched, mi_edge_index_batched_for_a3tgcn, mi_edge_index_batched_for_gin
+from src.data_processing.edge import (fully_connected_edge_index_batched, 
+                                      mi_edge_index_batched, 
+                                      mi_edge_index_batched_for_a3tgcn, 
+                                      mi_edge_index_batched_for_gin, 
+                                      )
 from src.models.ctmp_gin import CTMPGIN
 from src.models.gin import GIN
 from src.models.gingru import GinGru, GinGru_2_Point
@@ -39,19 +43,21 @@ def build_edge(model_name: str,
                                     seed=seed,
                                     train_df=train_df,
                                     n_neighbors=kwargs['n_neighbors'],
-                                    cache_path=kwargs['cache_path']
+                                    cache_path=kwargs['cache_path'],
+                                    remove_los=kwargs.get("remove_los", True),
                                     )
     else:
         mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = cv_mi_dict(root=root,
                             seed=seed,
                             train_df=train_df,
-                            n_neighbors=kwargs['n_neighbors'])
+                            n_neighbors=kwargs['n_neighbors'],
+                            remove_los=kwargs.get("remove_los", True),
+                            )
 
-
-    if model_name == "a3tgcn":
+    if model_name in ["a3tgcn", "a3tgcn_2_points"]:
         edge_index = mi_edge_index_batched_for_a3tgcn(batch_size=batch_size, 
                                                         num_nodes=num_nodes, 
-                                                        mi_avg_dict=mi_avg_dict,
+                                                        mi_avg_dict=mi_avg_dict, # 여기에 LOS가 들어가냐 마냐는 위의 remove_los에 달려 있음
                                                         top_k=kwargs["top_k"],
                                                         threshold=kwargs["threshold"],
                                                         pruning_ratio=kwargs["pruning_ratio"],
@@ -68,7 +74,7 @@ def build_edge(model_name: str,
                                                         return_edge_attr=kwargs["return_edge_attr"])
         return edge_index
     
-    edge_index = mi_edge_index_batched(batch_size=batch_size,
+    edge_index = mi_edge_index_batched(batch_size=batch_size, # ctmp_gin, gin_gru, gin_gru_2_points
                                        num_nodes=num_nodes,
                                        mi_ad_dict=mi_ad_dict,
                                        mi_dis_dict=mi_dis_dict,

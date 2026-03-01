@@ -218,7 +218,6 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                                             root=root, 
                                             trial=trial, 
                                             report_metric=report_metric, 
-                                            edge_cached=True, 
                                             mi_edge_path=mi_edge_path)
                 
                 if model_name == "xgboost":
