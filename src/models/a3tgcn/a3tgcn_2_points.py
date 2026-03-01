@@ -102,7 +102,8 @@ class A3TGCN_2_points(nn.Module):
         self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, embedding_dim=embedding_dim)
         
         # A3TGCN2 레이어 정의
-        a3tgcn_input_channel = embedding_dim
+        # append_los_to_vars adds 1 more feature (LOS) to the embedded features.
+        a3tgcn_input_channel = embedding_dim + 1
 
         self.a3tgcn_layer = A3TGCN2(in_channels=a3tgcn_input_channel,
                         out_channels=hidden_channel,

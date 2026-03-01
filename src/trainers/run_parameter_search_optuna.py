@@ -207,6 +207,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
             try:
                 mi_edge_path = None
                 if cfg_s["edge"].get("edge_cached", False):
+                    print("requesting mi...")
                     mi_edge_path = request_mi(
                         mode="single",
                         fold=None,
