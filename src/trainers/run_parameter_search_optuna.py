@@ -205,13 +205,15 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
             cfg_s["train"]["seed"] = int(seed)
             
             try:
-                mi_edge_path = request_mi(
-                    mode="single",
-                    fold=None,
-                    seed=seed,
-                    cfg=cfg_s,
-                    n_neighbors=cfg_s["edge"]["n_neighbors"],
-                )
+                mi_edge_path = None
+                if cfg_s["edge"].get("edge_cached", False):
+                    mi_edge_path = request_mi(
+                        mode="single",
+                        fold=None,
+                        seed=seed,
+                        cfg=cfg_s,
+                        n_neighbors=cfg_s["edge"]["n_neighbors"],
+                    )
                 cfg_s["edge"]["cache_path"] = mi_edge_path
                 # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=False)
                 out = run_single_experiment(cfg_s, 
