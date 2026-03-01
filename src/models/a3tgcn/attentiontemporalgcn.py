@@ -90,7 +90,7 @@ class A3TGCN(torch.nn.Module):
             H_previous = H_current 
             H_sequence_outputs.append(probs[period] * H_current)
 
-        H_accum = sum(H_sequence_outputs)
+        H_accum = torch.stack(H_sequence_outputs, dim=0).sum(dim=0)
 
         return H_accum
 

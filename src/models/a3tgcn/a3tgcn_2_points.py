@@ -124,11 +124,6 @@ class A3TGCN_2_points(nn.Module):
         Args:
             template_edge_index(torch.Tensor): edge_index는 동일하므로 template_edge_index로 한꺼번에 전달
         '''
-        # A3TGCN_2_points.forward 내 추가 추천
-        for i, dim in enumerate(self.col_dims):
-            if torch.any(x_batch[:, i] >= dim):
-                raise ValueError(f"Feature {i} has value out of bounds for embedding dim {dim}")
-        
         ad_idx_t = self.ad_idx_t.to(device)
         dis_idx_t = self.dis_idx_t.to(device)
         

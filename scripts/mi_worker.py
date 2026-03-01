@@ -147,7 +147,7 @@ def process_one_request_file(fname: str):
         
         remove_los = True
         model_name = req["cfg"]["model"].get("name", None)
-        if model_name in ["gin_gru_2_points", "a3tgcn_2_points"]:
+        if model_name in ["gin", "gin_gru_2_points", "a3tgcn_2_points"]:
             remove_los = False
         
         train_df = load_train_df(

@@ -81,6 +81,10 @@ def run_single_experiment(cfg,
         **cfg["model"].get("params", {})
     )
     model = model.to(device)
+    
+    if cfg["model"]["name"] in ["a3tgcn", "a3tgcn_2_points"]:
+        model = torch.compile(model, mode="reduce-overhead")
+
     total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     # build edge_index

@@ -70,10 +70,8 @@ def _seperate_ad(mi_dict: dict, ad_col_list):
     for key, value in mi_dict.items():
         if key not in ad_col_list:
             continue
-        cur_col = deepcopy(ad_col_list)
-        cur_col.remove(key)
-        new_value = value[cur_col]
-        mi_ad_dict[key] = new_value
+        cur_col = [c for c in ad_col_list if c != key and c in value.index]
+        mi_ad_dict[key] = value[cur_col]
     return mi_ad_dict
 
 def _seperate_dis(mi_dict: dict, dis_col_list):
@@ -89,17 +87,19 @@ def _seperate_dis(mi_dict: dict, dis_col_list):
     """
     mi_dis_dict = {}
     for key, value in mi_dict.items():
-        if key in dis_col_list:
-            cur_col = deepcopy(dis_col_list)
-            cur_col.remove(key)
-            new_value = value[cur_col]
-            new_index = [i[:-2] if "_D" in i else i for i in new_value.index]
-            new_value = value.reindex(new_index)
-
-            if "_D" in key:
-                key = key[:-2]
-            
-            mi_dis_dict[key] = new_value
+        if key not in dis_col_list:
+            continue
+        
+        cur_col = [c for c in dis_col_list if c != key and c in value.index]
+        new_value = value[cur_col].copy()
+        
+        # Rename index by removing "_D" suffix to align with admission variables
+        new_value.index = [i[:-2] if i.endswith("_D") else i for i in new_value.index]
+        
+        # If the key itself is a discharge variable, rename it too
+        new_key = key[:-2] if key.endswith("_D") else key
+        mi_dis_dict[new_key] = new_value
+        
     return mi_dis_dict
 
 def _get_avg(mi_ad_dict: dict, mi_dis_dict: dict):
@@ -114,11 +114,19 @@ def _get_avg(mi_ad_dict: dict, mi_dis_dict: dict):
         dict: Averaged MI dictionary.
     """
     mi_avg_dict = {}
-    var_list = mi_ad_dict.keys()
+    # Only average variables that exist in both dictionaries
+    common_vars = set(mi_ad_dict.keys()) & set(mi_dis_dict.keys())
     
-    for var in var_list:
-        avg_value = (mi_ad_dict[var] + mi_dis_dict[var]) / 2
-        mi_avg_dict[var] = avg_value
+    for var in common_vars:
+        # Align indices before averaging to handle cases where one side might have missing features
+        ad_series = mi_ad_dict[var]
+        dis_series = mi_dis_dict[var]
+        
+        # Intersection of indices to avoid NaNs during addition
+        common_idx = ad_series.index.intersection(dis_series.index)
+        if not common_idx.empty:
+            avg_value = (ad_series[common_idx] + dis_series[common_idx]) / 2
+            mi_avg_dict[var] = avg_value
     
     return mi_avg_dict
 
