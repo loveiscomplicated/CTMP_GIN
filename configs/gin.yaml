@@ -21,7 +21,7 @@ model:
 train:
   batch_size: 128
   learning_rate: 0.0004799804630214713 # optimizer learning rate
-  epochs: 100
+  epochs: 20
   seed: 1
   binary: True
   train_ratio: 0.70
