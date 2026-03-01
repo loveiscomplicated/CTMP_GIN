@@ -127,30 +127,34 @@ fi
 # -----------------------
 # Python deps (RTX 5090 / CUDA 12.8 대응 최적화)
 # -----------------------
+# -----------------------
+# Python deps (RTX 5090 + CUDA 12.8 최종 대응)
+# -----------------------
 conda activate "$ENV_NAME"
 
-# 1. pip 및 빌드 도구 최신화
+# 1. 빌드 도구 최신화
 python -m pip install -U pip setuptools wheel
 
-# 2. PyTorch 설치 (RTX 5090 지원을 위해 가장 최신 인덱스 사용)
-# 현재 5090은 매우 최신이므로 --pre(프리뷰) 버전을 사용하는 것이 가장 확실할 수 있습니다.
-echo "[$(ts)] Installing PyTorch for RTX 5090..."
-pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu124
+# 2. PyTorch, torchvision 통합 설치 (버전 충돌 방지)
+# 개별적으로 깔지 않고 한 줄에 써야 pip이 호환되는 버전을 한꺼번에 찾습니다.
+echo "[$(ts)] Installing Nightly PyTorch & Vision for RTX 5090..."
+pip install --pre torch torchvision torchaudio \
+  --index-url https://download.pytorch.org/whl/nightly/cu124 --no-cache-dir
 
-# 3. 설치 확인 (매우 중요)
-python -c "import torch; print(f'Torch: {torch.__version__}, CUDA: {torch.version.cuda}, GPU: {torch.cuda.get_device_name(0)}')" || die "Torch check failed"
+# 3. 설치 및 GPU 인식 확인 (이게 실패하면 중단)
+python -c "import torch; print(f'GPU: {torch.cuda.get_device_name(0)}'); print(f'CUDA version: {torch.version.cuda}')" || die "GPU check failed!"
 
-# 4. PyG 의존성 설치
-# 5090 환경에서는 바이너리가 없을 확률이 높으므로 소스에서 빌드하도록 유도합니다.
-echo "[$(ts)] Installing PyG dependencies (this may take a while)..."
-pip install torch-scatter torch-sparse torch-cluster torch-spline_conv -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__.split('+')[0])").html
+# 4. PyG 및 의존성 라이브러리 (바이너리 매칭)
+# 5090 환경은 바이너리가 없을 확률이 높으므로 소스 빌드를 유도하거나 
+# 가장 유사한 버전을 참조합니다.
+echo "[$(ts)] Installing PyG dependencies..."
+pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.7.0+cu124.html
 
-# 5. 나머지 설치
+# 5. PyG 본체 및 기타 패키지
 pip install torch-geometric
 cd "$REPO_DIR"
 pip install -r requirements.txt
 pip install requests gdown
-
 # -----------------------
 # Data download
 # -----------------------
