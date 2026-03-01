@@ -53,10 +53,6 @@ def run_single_experiment(cfg,
     if cfg["model"]["name"] == 'gin':
         num_nodes = len(dataset.col_info[0]) + 1
         
-    if cfg["model"]["name"] == 'gin_gru_2_points':
-        num_nodes += 1 # add LOS as a node
-    if cfg["model"]["name"] == 'a3tgcn_2_points':
-        num_nodes += 1 # add LOS as a node
 
     print(f"num_nodes set to {num_nodes}")
 
