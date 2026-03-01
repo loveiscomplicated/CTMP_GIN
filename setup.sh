@@ -132,17 +132,11 @@ conda activate "$ENV_NAME"
 # 1. pip 업그레이드
 python -m pip install -U pip
 
-# 2. PyTorch 설치 (대부분의 GPU에서 호환되는 CUDA 12.1 버전)
-echo "[$(ts)] Installing Stable PyTorch..."
-pip install torch==2.2.0 torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# 3. PyG 의존성 설치 (버전 명시적 매칭)
-# PyTorch 2.2.0과 CUDA 12.1에 딱 맞는 바이너리를 가져옵니다.
-echo "[$(ts)] Installing PyG dependencies..."
-pip install torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
+pip3 install torch torchvision
 
 # 4. PyG 본체 및 나머지 패키지 설치
 pip install torch-geometric
+
 cd "$REPO_DIR"
 pip install -r requirements.txt
 pip install requests gdown
