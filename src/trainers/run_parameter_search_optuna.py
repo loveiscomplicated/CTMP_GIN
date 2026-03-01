@@ -40,7 +40,7 @@ def suggest_ctmp_gin_params(trial, cfg):
     cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
     cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
 
-    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
     cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
@@ -60,7 +60,7 @@ def suggest_gin_params(trial, cfg):
     cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
     cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
 
-    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
     cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
@@ -76,7 +76,7 @@ def suggest_a3tgcn_params(trial, cfg):
     cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
     cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
 
-    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
     cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
@@ -92,7 +92,7 @@ def suggest_a3tgcn_2_points_params(trial, cfg):
     cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
     cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
 
-    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
     cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
@@ -114,7 +114,7 @@ def suggest_gin_gru_params(trial, cfg):
     cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
     cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
    
-    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
     cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
@@ -137,7 +137,7 @@ def suggest_gin_gru_2_points_params(trial, cfg):
     cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
     cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
    
-    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
     cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
