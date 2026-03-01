@@ -76,8 +76,13 @@ def get_col_info(df: pd.DataFrame, remove_los: bool=True, ig_label: bool=False):
         ad_col_index: admission에 해당하는 변수의 integer position
         dis_col_index: discharge에 해당하는 변수의 integer position
     '''
-    col_list = list(df.columns)
-    col_dims = get_col_dims(df, ig_label)
+    temp_df = df.copy()
+    if remove_los and 'LOS' in temp_df.columns:
+        temp_df = temp_df.drop('LOS', axis=1)
+
+    col_list = list(temp_df.columns)
+    col_dims = get_col_dims(temp_df, ig_label)
+    
     ad_col_index, dis_col_index = get_ad_dis_index(df, remove_los)
     return col_list, col_dims, ad_col_index, dis_col_index
 
