@@ -125,26 +125,25 @@ else
 fi
 
 # -----------------------
-# Python deps (수정본)
+# Python deps (RTX 5090 전용 최신 설정)
 # -----------------------
 conda activate "$ENV_NAME"
 
-# 1. pip 업그레이드
+# 1. pip 최신화
 python -m pip install -U pip
 
-# 2. PyTorch 설치 (CUDA 12.1용)
-pip install torch==2.2.0 torchvision --index-url https://download.pytorch.org/whl/cu121
+# 2. PyTorch 2.8+ 설치 (RTX 5090 Blackwell 아키텍처 지원)
+# 2026년 기준 최신 안정화 버전을 설치합니다.
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# 3. PyTorch Geometric 핵심 의존성 설치 (가장 중요: 인덱스 주소 확인)
-# 현재 PyTorch 2.2.0 + CUDA 12.1 환경에 맞는 빌드 버전을 직접 가져옵니다.
-pip install torch_scatter torch_sparse torch_cluster torch_spline_conv \
-  -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
+# 3. PyG 및 의존성 라이브러리 설치
+# 최신 PyTorch 버전에 맞춰 소스 빌드 또는 최신 인덱스를 참조합니다.
+pip install torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.8.0+cu124.html || \
+pip install torch_scatter torch_sparse torch_cluster torch_spline_conv
 
-# 4. PyG 본체 설치
+# 4. PyG 본체 및 기타 도구
 pip install torch-geometric
-
 cd "$REPO_DIR"
-# 5. 기타 패키지 설치 (기존 torch를 덮어쓰지 않도록 주의)
 pip install -r requirements.txt
 pip install requests gdown
 
