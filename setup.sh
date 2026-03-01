@@ -124,20 +124,27 @@ else
   conda create -y -n "$ENV_NAME" python=3.12
 fi
 
+# -----------------------
+# Python deps (수정본)
+# -----------------------
 conda activate "$ENV_NAME"
 
+# 1. pip 업그레이드
 python -m pip install -U pip
 
-# 1. PyTorch 설치 (CUDA 12.1용)
+# 2. PyTorch 설치 (CUDA 12.1용)
 pip install torch==2.2.0 torchvision --index-url https://download.pytorch.org/whl/cu121
 
-# 2. PyTorch Geometric 및 필수 의존성 설치 (가장 중요!)
-# PyTorch 버전과 CUDA 버전에 맞는 바이너리를 명시적으로 가져와야 합니다.
-pip install torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
+# 3. PyTorch Geometric 핵심 의존성 설치 (가장 중요: 인덱스 주소 확인)
+# 현재 PyTorch 2.2.0 + CUDA 12.1 환경에 맞는 빌드 버전을 직접 가져옵니다.
+pip install torch_scatter torch_sparse torch_cluster torch_spline_conv \
+  -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
+
+# 4. PyG 본체 설치
 pip install torch-geometric
 
 cd "$REPO_DIR"
-# 3. requirements.txt 설치 시 torch가 중복 설치되지 않도록 주의
+# 5. 기타 패키지 설치 (기존 torch를 덮어쓰지 않도록 주의)
 pip install -r requirements.txt
 pip install requests gdown
 
