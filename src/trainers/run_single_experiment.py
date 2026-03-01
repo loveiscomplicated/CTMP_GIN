@@ -33,7 +33,7 @@ def run_single_experiment(cfg,
 
     remove_los = True
     if cfg["model"]["name"] in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]:
-        remove_los = False
+        remove_los = False # include LOS in calculating MI
         cfg["edge"]["remove_los"] = False
 
     # create dataset
@@ -52,7 +52,6 @@ def run_single_experiment(cfg,
 
     if cfg["model"]["name"] == 'gin':
         num_nodes = len(dataset.col_info[0]) + 1
-        
 
     print(f"num_nodes set to {num_nodes}")
 
@@ -82,7 +81,7 @@ def run_single_experiment(cfg,
     )
     model = model.to(device)
     
-    if cfg["model"]["name"] in ["a3tgcn", "a3tgcn_2_points"]:
+    if device == torch.device('cuda') and cfg["model"]["name"] in ["gin", "a3tgcn", "a3tgcn_2_points"]:
         model = torch.compile(model, mode="reduce-overhead")
 
     total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

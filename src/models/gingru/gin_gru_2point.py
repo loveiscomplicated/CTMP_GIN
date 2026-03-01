@@ -80,7 +80,6 @@ class GinGru_2_Point(nn.Module):
         dropout_p: float = 0.2,
         gin_layer_out_dropout_p: float = 0.2,
         gru_layer_out_dropout_p: float = 0.2,
-        max_los_norm: float = 37.0,  # LOS feature scaling divisor
         **kwargs,
     ):
         super().__init__()
@@ -89,13 +88,14 @@ class GinGru_2_Point(nn.Module):
         self.dropout_p = float(dropout_p)
         self.gin_layer_out_dropout_p = float(gin_layer_out_dropout_p) 
         self.gru_layer_out_dropout_p = float(gru_layer_out_dropout_p)
-        self.max_los_norm = float(max_los_norm) if max_los_norm is not None else None
+        self.max_los = int(kwargs.get("max_los", 37))
 
         self.gin_layer_out_dropout = nn.Dropout(self.gin_layer_out_dropout_p)
         self.gru_layer_out_dropout = nn.Dropout(self.gru_layer_out_dropout_p)
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         self.col_list, self.col_dims, ad_col_index, dis_col_index = col_info
+        self.col_dims.append(self.max_los + 1) # LOS needs to be included in GIN, as it's excluded in col_info.
         self.ad_idx_t = torch.tensor(ad_col_index)
         self.dis_idx_t = torch.tensor(dis_col_index)
 
@@ -164,8 +164,8 @@ class GinGru_2_Point(nn.Module):
         # Embed variables: [B, V, embedding_dim]
         x_embedded = self.entity_embedding_layer(x_batch)
 
-        # Append LOS as node/variable feature: [B, V, embedding_dim + 1]
-        x_embedded = append_los_to_vars(x_embedded, LOS_batch, max_los=self.max_los_norm)
+        # Append LOS as node/variable feature: [B, V, embedding_dim + 1] --> updated to making LOS as node.
+        # x_embedded = append_los_to_vars(x_embedded, LOS_batch, max_los=self.max_los_norm)
 
         # Select admission/discharge variable sets and concat along batch: [B*2, N, F]
         x_separated = separate_x(x_embedded, ad_idx_t=ad_idx_t, dis_idx_t=dis_idx_t)

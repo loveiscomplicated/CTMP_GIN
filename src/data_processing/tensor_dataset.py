@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-
+import torch
 from torch.utils.data import Dataset
 from src.data_processing.data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims, make_binary
 from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
@@ -123,11 +123,12 @@ class TEDSTensorDataset(Dataset):
         
         self.processed_df = df # dataframe for edge building needs los column
 
-
         # To use torch.Embedding, organizing label as successive integers is needed.
         df = organize_labels(df, self.ig_label)
-        # make pd.DataFrame into torch.Tensor.
-        df_tensor = df_to_tensor(df)
+
+        label_col = "REASONb" if self.binary else "REASON"
+        y_tensor = df_to_tensor(df[label_col]).unsqueeze(1) # 라벨 추출
+
         # get col infos, list of (col_list, col_dims, ad_col_index, dis_col_index)
         # ad_col_index, dis_col_index: integer position of admission col, discharge col
         if self.binary:
@@ -138,6 +139,12 @@ class TEDSTensorDataset(Dataset):
             self.num_classes = len(df["REASON"].unique())
             df = df.drop("REASON", axis=1)
             col_info = get_col_info(df, remove_los=self.remove_los, ig_label=self.ig_label)
+
+        # whatever remove_los is, LOS needs to be removed at this point.
+        df = df.drop('LOS', axis=1, errors='ignore') 
+        # make pd.DataFrame into torch.Tensor.
+        x_tensor = df_to_tensor(df)
+        df_tensor = torch.cat([x_tensor, y_tensor], dim=1)
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         return df_tensor, col_info, LOS # -> self.process하면 tuple로 반환될 것

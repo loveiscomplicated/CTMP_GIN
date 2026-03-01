@@ -9,28 +9,6 @@ from src.models.entity_embedding import EntityEmbeddingBatch3
 from src.models.a3tgcn.attentiontemporalgcn import A3TGCN2
 
 
-def append_los_to_vars(x: torch.Tensor, los_batch: torch.Tensor, max_los: float = 37.0):
-    """
-    Append LOS as an additional feature to every variable/node feature vector.
-
-    Args:
-        x: [B, V, F]  (V = num variables, e.g., 72)
-        los_batch: [B]
-        max_los: used for min-max style scaling (los/max_los)
-
-    Returns:
-        [B, V, F+1]
-    """
-    B, V, _ = x.shape
-    los_feat = los_batch.float().unsqueeze(1).unsqueeze(2).expand(B, V, 1)
-
-    # (권장) 스케일 맞추기: 0~1 근처로
-    if max_los is not None and max_los > 0:
-        los_feat = los_feat / float(max_los)
-
-    return torch.cat([x, los_feat], dim=-1)
-
-
 def to_two_step_sequence(x: torch.Tensor):
     """
     Convert concatenated [ad; dis] graph embeddings into a 2-step GRU sequence.
@@ -75,7 +53,6 @@ class A3TGCN_2_points(nn.Module):
                  num_classes,
                  device,
                  cached=True,
-                 max_los_norm: float = 37.0,
                  **kwargs):
         '''
         Args:
@@ -89,8 +66,6 @@ class A3TGCN_2_points(nn.Module):
         self.batch_size = batch_size
         self.hidden_channel = hidden_channel
         self.num_classes = num_classes
-        self.max_los_norm = float(max_los_norm) if max_los_norm is not None else None
-
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         self.col_list, self.col_dims, self.ad_col_index, self.dis_col_index = col_info
@@ -103,7 +78,7 @@ class A3TGCN_2_points(nn.Module):
         
         # A3TGCN2 레이어 정의
         # append_los_to_vars adds 1 more feature (LOS) to the embedded features.
-        a3tgcn_input_channel = embedding_dim + 1
+        a3tgcn_input_channel = embedding_dim
 
         self.a3tgcn_layer = A3TGCN2(in_channels=a3tgcn_input_channel,
                         out_channels=hidden_channel,
@@ -130,9 +105,6 @@ class A3TGCN_2_points(nn.Module):
         
         # Embed variables: [B, V, embedding_dim]
         x_embedded = self.entity_embedding_layer(x_batch)
-
-        # Append LOS as node/variable feature: [B, V, embedding_dim + 1]
-        x_embedded = append_los_to_vars(x_embedded, LOS_batch, max_los=self.max_los_norm)
 
         # Select admission/discharge variable sets and concat along batch: [B*2, N, F]
         x_temporal = dual_time_stamp(x_embedded, ad_idx_t=ad_idx_t, dis_idx_t=dis_idx_t)

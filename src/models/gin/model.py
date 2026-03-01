@@ -19,7 +19,7 @@ class GIN(nn.Module):
         self.embedding_dim = embedding_dim
         self.col_dims = list(col_info[1]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index) 
         self.max_los = int(kwargs.get("max_los", 37))
-        self.col_dims.append(self.max_los + 1) # LOS needs to be included in GIN, as it's excluded in col_info.
+        # self.col_dims.append(self.max_los + 1) # LOS needs to be included in GIN, as it's excluded in col_info. --> remove_LOS parameter makes LOS included in col_info
         self.gin_dim = gin_dim
         self.gin_layer_num = gin_layer_num
         self.train_eps = train_eps
