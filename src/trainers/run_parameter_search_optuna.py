@@ -106,7 +106,7 @@ def suggest_gin_gru_params(trial, cfg):
     cfg["model"]["params"]["gin_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
     cfg["model"]["params"]["gin_layers"] = trial.suggest_int("gin_layers", 1, 6)
     cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
-    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gru_hidden_channel", [16, 32, 64, 96])
     cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
 
     cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
@@ -127,7 +127,7 @@ def suggest_gin_gru_2_points_params(trial, cfg):
     cfg["model"]["params"]["gin_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
     cfg["model"]["params"]["gin_layers"] = trial.suggest_int("gin_layers", 1, 6)
     cfg["model"]["params"]["train_eps"] = trial.suggest_categorical("train_eps", [True, False])
-    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["gru_hidden_channel"] = trial.suggest_categorical("gru_hidden_channel", [16, 32, 64, 96])
     cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
     cfg["model"]["params"]["gin_layer_out_dropout_p"] = trial.suggest_float("gin_layer_out_dropout_p", 0.0, 0.5)
     cfg["model"]["params"]["gru_layer_out_dropout_p"] = trial.suggest_float("gru_layer_out_dropout_p", 0.0, 0.5)
