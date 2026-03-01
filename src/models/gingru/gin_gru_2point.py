@@ -95,7 +95,7 @@ class GinGru_2_Point(nn.Module):
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         self.col_list, self.col_dims, ad_col_index, dis_col_index = col_info
-        self.col_dims.append(self.max_los + 1) # LOS needs to be included in GIN, as it's excluded in col_info.
+        # self.col_dims.append(self.max_los + 1) # LOS needs to be included in GIN, as it's excluded in col_info. --> updated: it is included in col_info
         self.ad_idx_t = torch.tensor(ad_col_index)
         self.dis_idx_t = torch.tensor(dis_col_index)
 
@@ -104,7 +104,7 @@ class GinGru_2_Point(nn.Module):
 
         # GIN MLPs
         gin_nn_input = nn.Sequential(
-            nn.Linear(embedding_dim + 1, gin_hidden_channel),  # +1 for LOS
+            nn.Linear(embedding_dim, gin_hidden_channel),
             nn.LayerNorm(gin_hidden_channel),
             nn.ReLU(),
             nn.Dropout(self.dropout_p),
