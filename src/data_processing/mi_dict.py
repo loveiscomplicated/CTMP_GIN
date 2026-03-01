@@ -174,7 +174,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, 
                 mi_dict = pickle.load(f)
         except Exception as e:
             print(f"FAILED: {e}. Moving to default search...")
-            print("Searching cached file by its seed...")
+            print("Searching cached file by its key...")
 
     # 2. If loading failed or cache_path was not provided, check the default path (seed-based)
     if mi_dict is None:

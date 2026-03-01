@@ -8,7 +8,6 @@ edge:
   pruning_ratio: 0.7
   return_edge_attr: False # CAUTION: potential error when set to True
   edge_cached: True
-  cache_path: None
 
 model:
   name: ctmp_gin
