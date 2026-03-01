@@ -3,9 +3,9 @@ device: null # if null, it automatically sets the available device. (cuda | mps 
 edge:
   is_mi_based: True # if 0, it generates fully connected edge index.
   n_neighbors: 5 # NOTE: cv result of n_neighbors: 3
-  top_k: 6
-  threshold: 0.0
-  pruning_ratio: 0.3
+  top_k: 9
+  threshold: 0.005
+  pruning_ratio: 0.5
   return_edge_attr: False # CAUTION: potential error when set to True
   edge_cached: True
   cache_path: None
@@ -13,14 +13,14 @@ edge:
 model:
   name: gin
   params:
-    embedding_dim: 64
-    gin_dim: 96
-    gin_layer_num: 4
-    train_eps: True
+    embedding_dim: 16
+    gin_dim: 64
+    gin_layer_num: 2
+    train_eps: False
 
 train:
-  batch_size: 128
-  learning_rate: 0.0004799804630214713 # optimizer learning rate
+  batch_size: 512
+  learning_rate: 0.001277545409338495 # optimizer learning rate
   epochs: 100
   seed: 1
   binary: True
@@ -31,8 +31,8 @@ train:
   lr_scheduler_patience: 5
   early_stopping_patience: 10
   decision_threshold: 0.5
-  optimizer: "adam"
-  weight_decay: 0.0003
+  optimizer: "adamw"
+  weight_decay: 5.1042448400634125e-05
   cv: False
   n_folds: 5
   ig_label: False
