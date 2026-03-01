@@ -126,23 +126,26 @@ fi
 
 conda activate "$ENV_NAME"
 
-# -----------------------
-# Python deps
-# -----------------------
 python -m pip install -U pip
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install torch_geometric
+
+# 1. PyTorch 설치 (CUDA 12.1용)
+pip install torch==2.2.0 torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# 2. PyTorch Geometric 및 필수 의존성 설치 (가장 중요!)
+# PyTorch 버전과 CUDA 버전에 맞는 바이너리를 명시적으로 가져와야 합니다.
+pip install torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
+pip install torch-geometric
+
 cd "$REPO_DIR"
+# 3. requirements.txt 설치 시 torch가 중복 설치되지 않도록 주의
 pip install -r requirements.txt
-pip install requests
+pip install requests gdown
 
 # -----------------------
 # Data download
 # -----------------------
 mkdir -p "$DATA_DIR"
 cd "$DATA_DIR"
-# Ensure gdown is available (usually in requirements.txt but just in case)
-pip install gdown || true
 gdown "$GDOWN_FILE_ID"
 
 echo "[$(ts)] Setup complete."
