@@ -80,10 +80,15 @@ def get_col_info(df: pd.DataFrame, remove_los: bool=True, ig_label: bool=False):
     if remove_los and 'LOS' in temp_df.columns:
         temp_df = temp_df.drop('LOS', axis=1)
 
+    # 2. 라벨 컬럼들도 확실히 제거 (REASON/REASONb)
+    for label in ['REASON', 'REASONb']:
+        if label in temp_df.columns:
+            temp_df = temp_df.drop(label, axis=1)
+
     col_list = list(temp_df.columns)
     col_dims = get_col_dims(temp_df, ig_label)
     
-    ad_col_index, dis_col_index = get_ad_dis_index(df, remove_los)
+    ad_col_index, dis_col_index = get_ad_dis_index(temp_df, remove_los)
     return col_list, col_dims, ad_col_index, dis_col_index
 
 def organize_labels(df: pd.DataFrame, ig_labels: bool=False):
