@@ -48,10 +48,10 @@ def run_single_experiment(cfg,
     cfg["model"]["params"]["num_classes"] = dataset.num_classes
     cfg["model"]["params"]["device"] = device
     
-    num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
-
     if cfg["model"]["name"] == 'gin':
-        num_nodes = len(dataset.col_info[0]) + 1
+        num_nodes = len(dataset.col_info[0])
+    else:
+        num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
 
     print(f"num_nodes set to {num_nodes}")
 
