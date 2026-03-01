@@ -70,8 +70,8 @@ class A3TGCN_2_points(nn.Module):
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         self.col_list, self.col_dims, self.ad_col_index, self.dis_col_index = col_info
 
-        self.ad_idx_t = torch.tensor(self.ad_col_index)
-        self.dis_idx_t = torch.tensor(self.dis_col_index)
+        self.register_buffer('ad_idx_t', torch.tensor(self.ad_col_index, dtype=torch.long))
+        self.register_buffer('dis_idx_t', torch.tensor(self.dis_col_index, dtype=torch.long))
 
         # EntityEmbedding 레이어 정의
         self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, embedding_dim=embedding_dim)
@@ -100,14 +100,14 @@ class A3TGCN_2_points(nn.Module):
         Args:
             template_edge_index(torch.Tensor): edge_index는 동일하므로 template_edge_index로 한꺼번에 전달
         '''
-        ad_idx_t = self.ad_idx_t.to(device)
-        dis_idx_t = self.dis_idx_t.to(device)
+        los_idx = LOS_batch.long().unsqueeze(1)
+        x_combined = torch.cat([x_batch, los_idx], dim=1) # [B, 73]
         
         # Embed variables: [B, V, embedding_dim]
-        x_embedded = self.entity_embedding_layer(x_batch)
+        x_embedded = self.entity_embedding_layer(x_combined)
 
         # Select admission/discharge variable sets and concat along batch: [B*2, N, F]
-        x_temporal = dual_time_stamp(x_embedded, ad_idx_t=ad_idx_t, dis_idx_t=dis_idx_t)
+        x_temporal = dual_time_stamp(x_embedded, ad_idx_t=self.ad_idx_t, dis_idx_t=self.dis_idx_t) # type: ignore
 
         after_GNN = self.a3tgcn_layer(x_temporal, template_edge_index)  # [B, N, hidden_channel]
 

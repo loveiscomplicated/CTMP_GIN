@@ -43,7 +43,7 @@ def build_edge(model_name: str,
                                     seed=seed,
                                     train_df=train_df,
                                     n_neighbors=kwargs['n_neighbors'],
-                                    cache_path=kwargs['cache_path'],
+                                    cache_path=kwargs.get('cache_path', None),
                                     remove_los=kwargs.get("remove_los", True),
                                     )
     else:
