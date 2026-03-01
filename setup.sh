@@ -125,36 +125,29 @@ else
 fi
 
 # -----------------------
-# Python deps (RTX 5090 / CUDA 12.8 대응 최적화)
-# -----------------------
-# -----------------------
-# Python deps (RTX 5090 + CUDA 12.8 최종 대응)
+# Python deps (표준 안정화 버전)
 # -----------------------
 conda activate "$ENV_NAME"
 
-# 1. 빌드 도구 최신화
-python -m pip install -U pip setuptools wheel
+# 1. pip 업그레이드
+python -m pip install -U pip
 
-# 2. PyTorch, torchvision 통합 설치 (버전 충돌 방지)
-# 개별적으로 깔지 않고 한 줄에 써야 pip이 호환되는 버전을 한꺼번에 찾습니다.
-echo "[$(ts)] Installing Nightly PyTorch & Vision for RTX 5090..."
-pip install --pre torch torchvision torchaudio \
-  --index-url https://download.pytorch.org/whl/nightly/cu124 --no-cache-dir
+# 2. PyTorch 설치 (대부분의 GPU에서 호환되는 CUDA 12.1 버전)
+echo "[$(ts)] Installing Stable PyTorch..."
+pip install torch==2.2.0 torchvision --index-url https://download.pytorch.org/whl/cu121
 
-# 3. 설치 및 GPU 인식 확인 (이게 실패하면 중단)
-python -c "import torch; print(f'GPU: {torch.cuda.get_device_name(0)}'); print(f'CUDA version: {torch.version.cuda}')" || die "GPU check failed!"
-
-# 4. PyG 및 의존성 라이브러리 (바이너리 매칭)
-# 5090 환경은 바이너리가 없을 확률이 높으므로 소스 빌드를 유도하거나 
-# 가장 유사한 버전을 참조합니다.
+# 3. PyG 의존성 설치 (버전 명시적 매칭)
+# PyTorch 2.2.0과 CUDA 12.1에 딱 맞는 바이너리를 가져옵니다.
 echo "[$(ts)] Installing PyG dependencies..."
-pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.7.0+cu124.html
+pip install torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.2.0+cu121.html
 
-# 5. PyG 본체 및 기타 패키지
+# 4. PyG 본체 및 나머지 패키지 설치
 pip install torch-geometric
 cd "$REPO_DIR"
 pip install -r requirements.txt
 pip install requests gdown
+
+echo "[$(ts)] Environment setup complete with Stable PyTorch."
 # -----------------------
 # Data download
 # -----------------------
