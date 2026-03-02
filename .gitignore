@@ -24,3 +24,5 @@ src/explainers/__pycache__
 .env
 mi_dict_1.pickle
 src/data/mi
+src/data_processing/wandb/run-20260302_183207-5b1u03c3
+src/data_processing/wandb
