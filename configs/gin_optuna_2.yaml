@@ -33,6 +33,6 @@ train:
   decision_threshold: 0.5
   optimizer: "adamw"
   weight_decay: 5.1042448400634125e-05
-  cv: False
+  cv: True
   n_folds: 5
   ig_label: False
