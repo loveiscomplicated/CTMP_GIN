@@ -244,7 +244,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
     return objective
 
 
-def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20, study_name: Optional[str] = None):
+def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20, study_name: Optional[str] = None, db="postgresql"):
 
     os.makedirs("runs", exist_ok=True)
 
@@ -262,13 +262,20 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
     ) # aggressive pruning
 
     model_name = base_cfg["model"]["name"]
+    # [수정 부분] storage 분기 처리
+    if db == "postgresql":
+        storage = "postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db"
+    else:
+        # 현재 경로에 sqlite db 파일을 생성합니다.
+        storage = f"sqlite:///runs/{model_name}_optuna.db"
+
     study_name = study_name or model_name
     study = optuna.create_study(
         direction="maximize",
         sampler=sampler,
         pruner=pruner,
         study_name=study_name,
-        storage="postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db",
+        storage=storage,
         load_if_exists=True,
     )
 
@@ -307,13 +314,16 @@ if __name__ == "__main__":
     # 1. 모델명 미리 파악 (백업 파일명용)
     base_cfg = load_cfg(config_path)
     model_name = base_cfg["model"]["name"]
-
-    try:
+    db = "sqlite"
+    try:    
         if args.init_only:
-            print(f"[*] Initializing study: {args.study_name or model_name}")
+            # init 시에도 동일한 storage 논리 적용
+            storage_url = "postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db" if db == "postgresql" else f"sqlite:///runs/{model_name}_optuna.db"
+            
+            print(f"[*] Initializing study: {args.study_name or model_name} on {db}")
             optuna.create_study(
                 study_name=args.study_name or model_name,
-                storage="postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db",
+                storage=storage_url,
                 direction="maximize",
                 load_if_exists=True
             )
@@ -325,8 +335,8 @@ if __name__ == "__main__":
                 n_trials=args.n_trials or 50,
                 epochs=args.epochs or 20,
                 study_name=args.study_name,
+                db=db # 파라미터 전달
             )
     finally:
-        # 2. 실험이 정상 종료되든, 중간에 멈추든 무조건 백업 실행
-        print("\n--- Starting Automatic Backup to SQLite ---")
+        print("\n--- Starting Automatic Backup ---")
         backup_to_sql(model_name=model_name)
