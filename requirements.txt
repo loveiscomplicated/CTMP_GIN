@@ -22,7 +22,7 @@ gdown
 rclone
 
 # --- interpretability ---
-captum
+# captum
 
 # experiment logger
-wandb
+# wandb

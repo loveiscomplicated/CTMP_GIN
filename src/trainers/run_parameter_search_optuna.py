@@ -7,6 +7,7 @@ import torch
 import numpy as np
 import argparse
 from src.trainers.run_single_experiment import run_single_experiment
+from src.utils.backup_postgresql import backup_to_sql
 from scripts.request_mi import request_mi
 from typing import Optional
 
@@ -301,27 +302,31 @@ if __name__ == "__main__":
     cur_dir = os.path.dirname(__file__)
     root = os.path.join(cur_dir, '..', 'data')
     root = os.path.abspath(root)
-
     config_path = os.path.abspath(args.config)
 
-    # CLI가 없으면 기본값 사용
-    n_trials = args.n_trials if args.n_trials is not None else 50
-    epochs = args.epochs if args.epochs is not None else 20
+    # 1. 모델명 미리 파악 (백업 파일명용)
+    base_cfg = load_cfg(config_path)
+    model_name = base_cfg["model"]["name"]
 
-    if args.init_only:
-        print(f"[*] Initializing study: {args.study_name}")
-        optuna.create_study(
-            study_name=args.study_name,
-            storage="postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db",
-            direction="maximize",
-            load_if_exists=True
-        )
-        print("[+] Initialization complete.")
-    else:
-        run_optuna(
-            config_path=config_path,
-            root=root,
-            n_trials=args.n_trials or 50,
-            epochs=args.epochs or 20,
-            study_name=args.study_name,
-        )
+    try:
+        if args.init_only:
+            print(f"[*] Initializing study: {args.study_name or model_name}")
+            optuna.create_study(
+                study_name=args.study_name or model_name,
+                storage="postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db",
+                direction="maximize",
+                load_if_exists=True
+            )
+            print("[+] Initialization complete.")
+        else:
+            run_optuna(
+                config_path=config_path,
+                root=root,
+                n_trials=args.n_trials or 50,
+                epochs=args.epochs or 20,
+                study_name=args.study_name,
+            )
+    finally:
+        # 2. 실험이 정상 종료되든, 중간에 멈추든 무조건 백업 실행
+        print("\n--- Starting Automatic Backup to SQLite ---")
+        backup_to_sql(model_name=model_name)
