@@ -10,7 +10,7 @@ edge:
   threshold: 0.01
   pruning_ratio: 0.5
   return_edge_attr: False # CAUTION: potential error when set to True
-  edge_cached: False
+  edge_cached: True
   cache_path: None
 
 model:
