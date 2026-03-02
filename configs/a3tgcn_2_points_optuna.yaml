@@ -31,8 +31,8 @@ train:
   num_workers: 2
   optimizer: "adam"
   weight_decay: 0.0
-  lr_scheduler_patience: 10
-  early_stopping_patience: 15
+  lr_scheduler_patience: 5
+  early_stopping_patience: 10
   decision_threshold: 0.5
   cv: True # kfold crosss validation
   n_folds: 5
