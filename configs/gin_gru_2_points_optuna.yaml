@@ -33,7 +33,7 @@ train:
   val_ratio: 0.15
   test_ratio: 0.15
   optimizer: "adam"
-  num_workers: 7
+  num_workers: 15
   lr_scheduler_patience: 5
   early_stopping_patience: 10
   decision_threshold: 0.5
