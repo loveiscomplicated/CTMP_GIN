@@ -17,7 +17,7 @@ model:
     gin_1_layers: 2
     gin_hidden_channel_2: 96 # Must match the first GIN's dimensions to avoid errors; 
                              # otherwise, a projection layer is required.
-    gin_2_layers: 2
+    gin_2_layers: 3
     train_eps: True
     los_embedding_dim: 64
     gate_hidden_ch: 96 # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
