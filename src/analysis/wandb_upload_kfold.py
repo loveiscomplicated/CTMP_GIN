@@ -39,8 +39,8 @@ if __name__ == "__main__":
     cur_dir = os.path.dirname(__file__)
     runs_protected_path = os.path.join(cur_dir, '..', '..', 'runs', 'protected')
     model_name='gin_gru_2_points'
-    seed=2
-    common_path = os.path.join(runs_protected_path, 'k_fold_CV', '20260304-022257__gin_gru_2_points__bs=64__lr=3.37e-04__seed=2__cv=5__test=0.15', 'folds')
+    seed=3
+    common_path = os.path.join(runs_protected_path, 'k_fold_CV', '20260304-231526__gin_gru_2_points__bs=64__lr=3.37e-04__seed=3__cv=5__test=0.15', 'folds')
     # 자동화 예시
     for i in range(5):
         fold_path = os.path.join(common_path, f'fold_{i}', 'metrics.jsonl')
