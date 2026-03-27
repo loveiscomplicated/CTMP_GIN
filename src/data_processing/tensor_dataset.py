@@ -2,10 +2,17 @@ import os
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-from src.data_processing.data_utils import get_col_info, organize_labels, df_to_tensor, get_col_dims, make_binary
+from src.data_processing.data_utils import (
+    get_col_info,
+    organize_labels,
+    df_to_tensor,
+    get_col_dims,
+    make_binary,
+)
 from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
 
 CURDIR = os.path.dirname(__file__)
+
 
 class TEDSTensorDataset(Dataset):
     """
@@ -25,7 +32,15 @@ class TEDSTensorDataset(Dataset):
             (List of column indices at admission, list of column indices at discharge)
         LOS (pandas.Series): Length of Stay (LOS) information.
     """
-    def __init__(self, root:str, binary=True, ig_label=False, remove_los=True):
+
+    def __init__(
+        self,
+        root: str,
+        binary=True,
+        ig_label=False,
+        remove_los=True,
+        do_preprocess=False,
+    ):
         """
         Constructor for the TEDSTensorDataset.
 
@@ -43,9 +58,13 @@ class TEDSTensorDataset(Dataset):
         self.ig_label = ig_label
         self.remove_los = remove_los
         self.root = root
-        self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
-        self.missing_corrected_path = os.path.join(self.root, 'raw', 'missing_corrected.csv')
-        
+        self.do_preprocess = do_preprocess
+        self.raw_data_path = os.path.join(self.root, "raw", "TEDS_Discharge.csv")
+
+        self.missing_corrected_path = os.path.join(
+            self.root, "raw", "missing_corrected.csv"
+        )
+
         self.processed_tensor, self.col_info, self.LOS = self.process()
 
     def __getitem__(self, index):
@@ -64,14 +83,14 @@ class TEDSTensorDataset(Dataset):
         y_label = self.processed_tensor[index, -1]
         los = self.LOS[index]
         return input_tensor, y_label, los
-    
+
     def __len__(self):
         """
         Returns:
             int: Size of the dataset (number of samples).
         """
         return self.processed_tensor.shape[0]
-    
+
     def process(self):
         """
         Reads the raw data and performs preprocessing.
@@ -89,72 +108,81 @@ class TEDSTensorDataset(Dataset):
         Returns:
             tuple: A tuple (df_tensor, col_info, LOS) containing the preprocessed data.
         """
-        # missing value 
-        df = tackle_missing_value_wrapper(self.raw_data_path, self.missing_corrected_path)
+        if not self.do_preprocess:
+            # missing value
+            df = tackle_missing_value_wrapper(
+                self.raw_data_path, self.missing_corrected_path
+            )
+        else:
+            df = pd.read_csv(self.raw_data_path)
 
         # remove unused variables
         # 1. CASEID -> ID of the cases.
         # 2. DISYR -> same in all cases.
         # These two things aren't needed in training model.
-        df = df.drop(['DISYR', 'CASEID'], axis=1)
+        df = df.drop(["DISYR", "CASEID"], axis=1)
 
         # Prepare REASON or REASONb
-        if 'REASON' not in df.columns:
-            raise ValueError('No REASON variable in the raw data.')
-        
+        if "REASON" not in df.columns:
+            raise ValueError("No REASON variable in the raw data.")
+
         if self.binary:
             df = make_binary(df)
         else:
             # rearrange the position of REASON column to easily get the y item like this:
             # ```y_label = self.processed_tensor[index, -1]```
             columns = list(df.columns)
-            columns.remove('REASON')
-            columns.append('REASON')
+            columns.remove("REASON")
+            columns.append("REASON")
             df = df[columns]
 
         # get los
-        if 'LOS' in df.columns:
-            LOS = df['LOS']
+        if "LOS" in df.columns:
+            LOS = df["LOS"]
             LOS = df_to_tensor(LOS)
             if self.remove_los:
-                df = df.drop('LOS', axis=1)
+                df = df.drop("LOS", axis=1)
         else:
-            raise ValueError('No LOS variable in the raw data.')
-        
-        self.processed_df = df # dataframe for edge building needs los column
+            raise ValueError("No LOS variable in the raw data.")
+
+        self.processed_df = df  # dataframe for edge building needs los column
 
         # To use torch.Embedding, organizing label as successive integers is needed.
         df = organize_labels(df, self.ig_label)
 
         label_col = "REASONb" if self.binary else "REASON"
-        y_tensor = df_to_tensor(df[label_col]).unsqueeze(1) # 라벨 추출
+        y_tensor = df_to_tensor(df[label_col]).unsqueeze(1)  # 라벨 추출
 
         # get col infos, list of (col_list, col_dims, ad_col_index, dis_col_index)
         # ad_col_index, dis_col_index: integer position of admission col, discharge col
         if self.binary:
             self.num_classes = len(df["REASONb"].unique())
             df = df.drop("REASONb", axis=1)
-            col_info = get_col_info(df, remove_los=self.remove_los, ig_label=self.ig_label)
+            col_info = get_col_info(
+                df, remove_los=self.remove_los, ig_label=self.ig_label
+            )
         else:
             self.num_classes = len(df["REASON"].unique())
             df = df.drop("REASON", axis=1)
-            col_info = get_col_info(df, remove_los=self.remove_los, ig_label=self.ig_label)
+            col_info = get_col_info(
+                df, remove_los=self.remove_los, ig_label=self.ig_label
+            )
 
         # whatever remove_los is, LOS needs to be removed at this point.
-        df = df.drop('LOS', axis=1, errors='ignore') 
+        df = df.drop("LOS", axis=1, errors="ignore")
         # make pd.DataFrame into torch.Tensor.
         x_tensor = df_to_tensor(df)
         df_tensor = torch.cat([x_tensor, y_tensor], dim=1)
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
-        return df_tensor, col_info, LOS # -> self.process하면 tuple로 반환될 것
-    
-    
+        return df_tensor, col_info, LOS  # -> self.process하면 tuple로 반환될 것
+
+
 class TEDSDatasetForGIN(Dataset):
     def __init__(self, root, binary=True):
         """
         Constructor for the TEDSDatasetForGIN.
-        This Dataset is for Plain GIN. Static graph representation. 
+        This Dataset is for Plain GIN. Static graph representation.
         (Does not seperate admission and discharge)
 
         This initializes dataset paths, creates required directories, and either loads
@@ -169,32 +197,36 @@ class TEDSDatasetForGIN(Dataset):
         self.binary = binary
 
         self.root = root
-        self.raw_data_path = os.path.join(self.root, 'raw', 'TEDS_Discharge.csv')
-        self.missing_corrected_path = os.path.join(self.root, 'raw', 'missing_corrected.csv')
+        self.raw_data_path = os.path.join(self.root, "raw", "TEDS_Discharge.csv")
+        self.missing_corrected_path = os.path.join(
+            self.root, "raw", "missing_corrected.csv"
+        )
 
-        df = tackle_missing_value_wrapper(self.raw_data_path, self.missing_corrected_path)
+        df = tackle_missing_value_wrapper(
+            self.raw_data_path, self.missing_corrected_path
+        )
 
         # remove unused variables
         # 1. CASEID -> ID of the cases.
         # 2. DISYR -> same in all cases.
         # These two things aren't needed in training model.
-        df = df.drop(['DISYR', 'CASEID'], axis=1)
+        df = df.drop(["DISYR", "CASEID"], axis=1)
 
-        if 'REASON' not in df.columns:
-            raise ValueError('no \"REASON\" variable in the raw data.')
-        
+        if "REASON" not in df.columns:
+            raise ValueError('no "REASON" variable in the raw data.')
+
         if self.binary:
             df = make_binary(df)
         else:
             columns = list(df.columns)
-            columns.remove('REASON')
-            columns.append('REASON')
+            columns.remove("REASON")
+            columns.append("REASON")
             df = df[columns]
 
         # label_organize
         df = organize_labels(df)
         self.processed_df = df
-        
+
         # make pd.DataFrame into torch.Tensor.
         self.df_tensor = df_to_tensor(df)
 
@@ -205,7 +237,7 @@ class TEDSDatasetForGIN(Dataset):
             self.num_classes = len(df["REASON"].unique())
             df = df.drop("REASON", axis=1)
         self.col_info = get_col_info(df, ig_label=False)
-        
+
     def __getitem__(self, index):
         """
         Returns a single sample and its label corresponding to the given index.
@@ -221,11 +253,10 @@ class TEDSDatasetForGIN(Dataset):
         x = self.df_tensor[index, :-1]
         y = self.df_tensor[index, -1]
         return x, y
-    
+
     def __len__(self):
         """
         Returns:
             int: Size of the dataset (number of samples).
         """
         return self.df_tensor.shape[0]
-    

@@ -11,11 +11,12 @@ from src.trainers.run_single_experiment import run_single_experiment
 from src.trainers.run_kfold_cv import run_kfold_experiment
 
 cur_dir = os.path.dirname(__file__)
-root = os.path.join(cur_dir, 'data')
+root = os.path.join(cur_dir, "data")
+
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", type=str, required=True) # config file location
+    p.add_argument("--config", type=str, required=True)  # config file location
     # overrides
     # p.add_argument("--model", type=str, default=None) no need, model selection only based on config
     # more detailed adjustment able in config file
@@ -31,10 +32,12 @@ def parse_args():
     p.add_argument("--cv", type=bool, default=True)
     return p.parse_args()
 
+
 def load_yaml(path: str) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
-    
+
+
 def override_cfg(cfg: dict, args) -> dict:
     if args.device is not None:
         cfg["device"] = args.device
@@ -58,18 +61,17 @@ def override_cfg(cfg: dict, args) -> dict:
         cfg.setdefault("cv", {})["cv"] = args.cv
     return cfg
 
+
 def main():
     args = parse_args()
     cfg = load_yaml(args.config)
     cfg = override_cfg(cfg, args)
 
-    
     if cfg["train"]["cv"]:
         run_kfold_experiment(cfg, root)
     else:
         run_single_experiment(cfg, root)
 
-    
 
 if __name__ == "__main__":
     main()

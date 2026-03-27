@@ -6,22 +6,29 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from src.utils.seed_set import set_seed
-from src.data_processing.splits import holdout_test_split_stratified, kfold_stratified, make_loaders
+from src.data_processing.splits import (
+    holdout_test_split_stratified,
+    kfold_stratified,
+    make_loaders,
+)
 from src.data_processing.tensor_dataset import TEDSTensorDataset, TEDSDatasetForGIN
 from src.models.factory import build_model, build_edge
 from src.trainers.base import run_train_loop
-from src.utils.experiment import (make_run_id, 
-                                  save_text, 
-                                  save_yaml, 
-                                  _get_command_line, 
-                                  _get_git_info,
-                                  ExperimentLogger)
+from src.utils.experiment import (
+    make_run_id,
+    save_text,
+    save_yaml,
+    _get_command_line,
+    _get_git_info,
+    ExperimentLogger,
+)
 from src.utils.device_set import device_set
 from src.trainers.utils.early_stopper import EarlyStopper
 
 
 def ensure_dir(path: str):
     os.makedirs(path, exist_ok=False)
+
 
 def run_kfold_experiment(cfg, root):
     K = cfg["train"]["n_folds"]
@@ -39,21 +46,22 @@ def run_kfold_experiment(cfg, root):
     save_text(os.path.join(cv_dir, "git.txt"), _get_git_info())
 
     seed = cfg["train"].get("seed", 42)
-    set_seed(seed) 
+    set_seed(seed)
 
     device = device_set(cfg["device"])
 
     remove_los = True
     if cfg["model"]["name"] in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]:
-        remove_los = False # include LOS in calculating MI
+        remove_los = False  # include LOS in calculating MI
         cfg["edge"]["remove_los"] = False
 
-   # create dataset
+    # create dataset
     dataset = TEDSTensorDataset(
         root=root,
         binary=cfg["train"].get("binary", True),
         ig_label=cfg["train"].get("ig_label", False),
         remove_los=remove_los,
+        do_preprocess=cfg["train"].get("do_preprocess", True),
     )
 
     labels = np.array([dataset[i][1] for i in range(len(dataset))])
@@ -61,26 +69,22 @@ def run_kfold_experiment(cfg, root):
     cfg["model"]["params"]["num_classes"] = dataset.num_classes
     cfg["model"]["params"]["device"] = str(device)
 
-    if cfg["model"]["name"] == 'gin':
+    if cfg["model"]["name"] == "gin":
         num_nodes = len(dataset.col_info[0])
     else:
-        num_nodes = len(dataset.col_info[2]) # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
+        num_nodes = len(
+            dataset.col_info[2]
+        )  # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
     print(f"num_nodes set to {num_nodes}")
-    
+
     trainval_idx, test_idx = holdout_test_split_stratified(
-        dataset=dataset,
-        test_ratio=test_ratio,
-        seed=seed,
-        labels=labels
+        dataset=dataset, test_ratio=test_ratio, seed=seed, labels=labels
     )
 
     fold_results = []
 
     for fold, train_idx, val_idx in kfold_stratified(
-        trainval_idx=trainval_idx,
-        labels=labels,
-        n_folds=K,
-        seed=seed
+        trainval_idx=trainval_idx, labels=labels, n_folds=K, seed=seed
     ):
         fold_cfg = copy.deepcopy(cfg)
         fold_cfg["fold"] = fold
@@ -100,9 +104,9 @@ def run_kfold_experiment(cfg, root):
             train_idx=train_idx,
             val_idx=val_idx,
             test_idx=test_idx,
-            batch_size=cfg['train']['batch_size'],
-            num_workers=cfg['train']['num_workers'],
-            drop_last=True
+            batch_size=cfg["train"]["batch_size"],
+            num_workers=cfg["train"]["num_workers"],
+            drop_last=True,
         )
 
         print(len(train_loader))
@@ -111,53 +115,64 @@ def run_kfold_experiment(cfg, root):
 
         if cfg["model"]["name"] == "xgboost":
             from src.models.xgboost import train_xgboost
-            result = train_xgboost(train_idx, val_idx, test_idx, dataset.processed_df, fold_logger, cfg)
+
+            result = train_xgboost(
+                train_idx, val_idx, test_idx, dataset.processed_df, fold_logger, cfg
+            )
             fold_results.append(result)
             continue
-        
+
         if cfg["model"]["name"] in ["a3tgcn", "a3tgcn_2_points"]:
             cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
 
         # build model
         model = build_model(
-            model_name=cfg["model"]["name"],
-            **cfg["model"].get("params", {})
+            model_name=cfg["model"]["name"], **cfg["model"].get("params", {})
         )
         model = model.to(device)
-        total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_trainable_params = sum(
+            p.numel() for p in model.parameters() if p.requires_grad
+        )
         print(model)
         print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
 
         # build edge_index
-        edge_index = build_edge(model_name=cfg["model"]["name"],
-                                root=root,
-                                seed=seed,
-                                train_df=train_df,
-                                num_nodes=num_nodes,
-                                batch_size = cfg["train"]["batch_size"],
-                                **cfg.get("edge", {})
-                                )
-        edge_index = edge_index.to(device) # type: ignore
+        edge_index = build_edge(
+            model_name=cfg["model"]["name"],
+            root=root,
+            seed=seed,
+            train_df=train_df,
+            num_nodes=num_nodes,
+            batch_size=cfg["train"]["batch_size"],
+            **cfg.get("edge", {}),
+        )
+        edge_index = edge_index.to(device)  # type: ignore
 
-        print(f'edge index: \n{edge_index}')
-        print(f'edge index shape: \n{edge_index.shape}')
+        print(f"edge index: \n{edge_index}")
+        print(f"edge index shape: \n{edge_index.shape}")
 
         if cfg["train"]["binary"]:
             criterion = nn.BCEWithLogitsLoss()
         else:
             criterion = nn.CrossEntropyLoss()
-            
+
         if cfg["train"].get("optimizer", "adam") == "adamw":
-            optimizer = torch.optim.AdamW(model.parameters(), 
-                                        lr=cfg["train"]["learning_rate"], 
-                                        weight_decay=cfg["train"].get("weight_decay", 0.0))
-            
-        else: # if adam
-            optimizer = torch.optim.Adam(model.parameters(),
-                                        lr=cfg["train"]["learning_rate"], 
-                                        weight_decay=cfg["train"].get("weight_decay", 0.0))
-            
-        scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                lr=cfg["train"]["learning_rate"],
+                weight_decay=cfg["train"].get("weight_decay", 0.0),
+            )
+
+        else:  # if adam
+            optimizer = torch.optim.Adam(
+                model.parameters(),
+                lr=cfg["train"]["learning_rate"],
+                weight_decay=cfg["train"].get("weight_decay", 0.0),
+            )
+
+        scheduler = ReduceLROnPlateau(
+            optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"]
+        )
         early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
 
         results = run_train_loop(
@@ -176,7 +191,7 @@ def run_kfold_experiment(cfg, root):
             epochs=cfg["train"]["epochs"],
             decision_threshold=cfg["train"]["decision_threshold"],
             model_name=cfg["model"].get("name", "Unknown"),
-            trial=None
+            trial=None,
         )
 
         results["fold"] = fold
