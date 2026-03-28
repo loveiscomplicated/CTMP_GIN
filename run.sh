@@ -184,7 +184,7 @@ conda activate "$ENV_NAME"
 # Python deps (your order)
 # -----------------------
 python -m pip install -U pip
-pip3 install torch torchvision
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 pip install torch_geometric
 cd "$REPO_DIR"
 pip install -r requirements.txt
