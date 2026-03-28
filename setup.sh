@@ -132,8 +132,8 @@ conda activate "$ENV_NAME"
 # 1. pip 업그레이드
 python -m pip install -U pip
 
-# pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
 
 # 4. PyG 본체 및 나머지 패키지 설치
