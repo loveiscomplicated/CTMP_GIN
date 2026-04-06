@@ -1,5 +1,5 @@
 """
-permutation_importance_ctmpgin.py
+permutation_importance.py
 
 Permutation-based global importance for CTMP-GIN style models where:
 
@@ -7,15 +7,18 @@ Model forward signature:
     model(x, los, edge_index, device) -> logits (or (logits, ...))
 
 Dataloader yields batches unpackable as:
-    x, los, y
+    x, y, los
 
 Edge index is fixed for the whole dataset and provided once to the module.
-The module will reuse the fixed edge_index for all batches.
+
+Key design: shuffle is performed GLOBALLY across the entire dataset (not within
+each batch), which avoids underestimation of importance that occurs with
+batch-local permutation.
 
 Outputs:
     pandas.DataFrame sorted by importance (descending), including:
-      - each node(variable) importance via permuting x[:, j, :] across patients
-      - LOS importance via permuting los across patients
+      - each node(variable) importance via permuting x[:, j] across all patients
+      - LOS importance via permuting los across all patients
 
 Metric:
     Binary ROC-AUC (default).
@@ -28,7 +31,7 @@ Progress:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, List, Optional, Tuple, Union, Dict
+from typing import Any, Iterable, List, Optional, Tuple, Union, Dict
 import sys
 import numpy as np
 import pandas as pd
@@ -54,41 +57,6 @@ class PermutationImportanceConfig:
 # -----------------------------
 # Helpers
 # -----------------------------
-
-def _permute_node_feature(x: Tensor, node_idx: int, rng: torch.Generator) -> Tensor:
-    """
-    Permute a single variable(node) across the batch dimension.
-
-    Supports:
-      - x: [B, V]      (categorical ids / scalar features)
-      - x: [B, V, F]   (embedded / vector features)
-    """
-    if x.dim() == 2:
-        B = x.size(0)
-        perm = torch.randperm(B, generator=rng, device=x.device)
-        x_perm = x.clone()
-        x_perm[:, node_idx] = x_perm[perm, node_idx]
-        return x_perm
-
-    if x.dim() == 3:
-        B = x.size(0)
-        perm = torch.randperm(B, generator=rng, device=x.device)
-        x_perm = x.clone()
-        x_perm[:, node_idx, :] = x_perm[perm, node_idx, :]
-        return x_perm
-
-    raise ValueError(f"Expected x to have shape [B,V] or [B,V,F], got {tuple(x.shape)}")
-
-
-
-def _permute_los(los: Tensor, rng: torch.Generator) -> Tensor:
-    """Permute los across batch dimension (dim=0). los: [B] or [B, ...]"""
-    if los.dim() < 1:
-        raise ValueError(f"Expected los dim >= 1, got {tuple(los.shape)}")
-    B = los.size(0)
-    perm = torch.randperm(B, generator=rng, device=los.device)
-    return los[perm]
-
 
 def _to_device(t: Tensor, device: Union[str, torch.device]) -> Tensor:
     return t.to(device)
@@ -123,59 +91,6 @@ def _predict_proba(
     raise ValueError(f"Unsupported logits shape: {tuple(logits.shape)}")
 
 
-def _compute_auc(
-    model: torch.nn.Module,
-    dataloader: Iterable,
-    edge_index: Tensor,
-    device: Union[str, torch.device],
-    mutate_fn: Optional[Callable[[Tensor, Tensor, torch.Generator], Tuple[Tensor, Tensor]]] = None,
-    seed: int = 0,
-) -> float:
-    """
-    Compute ROC-AUC over the dataloader.
-    Optionally applies a mutation to (x, los) per batch.
-
-    mutate_fn signature:
-        (x, los, rng) -> (x_mut, los_mut)
-    """
-    model.eval()
-    y_all: List[np.ndarray] = []
-    p_all: List[np.ndarray] = []
-
-    rng = torch.Generator(device=str(device) if isinstance(device, torch.device) else device)
-    rng.manual_seed(seed)
-
-    edge_index = edge_index.to(device)
-    with torch.no_grad():   
-        for batch in tqdm(dataloader):
-            x, y, los = batch
-            x = _to_device(x, device)
-            y = _to_device(y, device)
-            los = _to_device(los, device)
-
-            if mutate_fn is not None:
-                x, los = mutate_fn(x, los, rng)
-
-            probs = _predict_proba(model, x, los, edge_index, device=device)
-
-            y_1d = _to_1d_binary_labels(y)
-            p_1d = _to_1d_pos_scores(probs)
-
-            y_all.append(y_1d.detach().cpu().numpy())
-            p_all.append(p_1d.detach().cpu().numpy())
-
-    y_cat = np.concatenate(y_all, axis=0).reshape(-1)
-    p_cat = np.concatenate(p_all, axis=0).reshape(-1)
-
-    if np.unique(y_cat).size < 2:
-        return float("nan")
-    return float(roc_auc_score(y_cat, p_cat))
-
-
-# -----------------------------
-# Public API
-# -----------------------------
-
 def _to_1d_binary_labels(y: Tensor) -> Tensor:
     """
     Ensure y is 1D binary labels [N] with values in {0,1}.
@@ -188,10 +103,9 @@ def _to_1d_binary_labels(y: Tensor) -> Tensor:
         return y.long().view(-1)
 
     if y.dim() == 2:
-        # Common cases: [N,2] or [2,N]
-        if y.size(1) == 2:          # [N,2]
+        if y.size(1) == 2:
             return torch.argmax(y, dim=1).long().view(-1)
-        if y.size(0) == 2:          # [2,N]
+        if y.size(0) == 2:
             return torch.argmax(y, dim=0).long().view(-1)
 
     raise ValueError(f"Unsupported y shape for binary labels: {tuple(y.shape)}")
@@ -209,13 +123,89 @@ def _to_1d_pos_scores(p: Tensor) -> Tensor:
         return p.view(-1)
 
     if p.dim() == 2:
-        if p.size(1) == 2:          # [N,2]
+        if p.size(1) == 2:
             return p[:, 1].contiguous().view(-1)
-        if p.size(0) == 2:          # [2,N]
+        if p.size(0) == 2:
             return p[1, :].contiguous().view(-1)
 
     raise ValueError(f"Unsupported prediction shape for binary AUC: {tuple(p.shape)}")
 
+
+def _collect_tensors(
+    dataloader: Iterable,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """
+    Iterate the dataloader once and collect all (x, y, los) into CPU tensors.
+
+    Returns:
+        all_x   [N, V]  CPU tensor
+        all_y   [N]     CPU tensor
+        all_los [N]     CPU tensor
+    """
+    xs, ys, lss = [], [], []
+    for batch in dataloader:
+        x, y, los = batch
+        if not isinstance(x, Tensor) or x.dim() != 2:
+            raise ValueError(
+                f"Expected x to have shape [B, V], got {type(x)} with shape "
+                f"{getattr(x, 'shape', None)}"
+            )
+        xs.append(x.cpu())
+        ys.append(y.cpu())
+        lss.append(los.cpu())
+
+    all_x = torch.cat(xs, dim=0)    # [N, V]
+    all_y = torch.cat(ys, dim=0)    # [N]
+    all_los = torch.cat(lss, dim=0) # [N]
+    return all_x, all_y, all_los
+
+
+def _run_auc_on_tensors(
+    model: torch.nn.Module,
+    all_x: Tensor,
+    all_y: Tensor,
+    all_los: Tensor,
+    edge_index: Tensor,
+    device: Union[str, torch.device],
+    batch_size: int,
+) -> float:
+    """
+    Split [N] CPU tensors into batches, run model forward, compute ROC-AUC.
+    edge_index must already be on device.
+    """
+    model.eval()
+    N = all_x.size(0)
+    if N == 0:
+        return float("nan")
+
+    y_all: List[np.ndarray] = []
+    p_all: List[np.ndarray] = []
+
+    with torch.no_grad():
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            x_b   = all_x[start:end].to(device)
+            y_b   = all_y[start:end].to(device)
+            los_b = all_los[start:end].to(device)
+
+            probs = _predict_proba(model, x_b, los_b, edge_index, device=device)
+            y_1d = _to_1d_binary_labels(y_b)
+            p_1d = _to_1d_pos_scores(probs)
+
+            y_all.append(y_1d.detach().cpu().numpy())
+            p_all.append(p_1d.detach().cpu().numpy())
+
+    y_cat = np.concatenate(y_all, axis=0).reshape(-1)
+    p_cat = np.concatenate(p_all, axis=0).reshape(-1)
+
+    if np.unique(y_cat).size < 2:
+        return float("nan")
+    return float(roc_auc_score(y_cat, p_cat))
+
+
+# -----------------------------
+# Public API
+# -----------------------------
 
 def compute_permutation_importance(
     model: torch.nn.Module,
@@ -225,30 +215,40 @@ def compute_permutation_importance(
     config: Optional[PermutationImportanceConfig] = None,
     show_progress: bool = True,
 ) -> pd.DataFrame:
+    """
+    Compute global permutation importance with GLOBAL shuffle (not batch-local).
+
+    For each feature j:
+      1. Permute x[:, j] across ALL N samples (global randperm)
+      2. Run forward pass in batches
+      3. importance = baseline_auc - permuted_auc
+
+    This avoids the underestimation that occurs when shuffling within small batches.
+    """
     if config is None:
         config = PermutationImportanceConfig()
 
-    # ✅ V 먼저 추정 (baseline 전에 해야 total_steps 계산 가능)
-    first_batch = next(iter(dataloader))
-    x0, y0, los0 = first_batch  # noqa: F841
-    if not torch.is_tensor(x0) or x0.dim() not in (2, 3):
-        raise ValueError(
-            f"Expected x to have shape [B,V] or [B,V,F]. Got {type(x0)} with shape {getattr(x0, 'shape', None)}"
-        )
-    V = x0.size(1)
+    # Collect entire dataset into memory (CPU)
+    print("Collecting dataset into memory...")
+    all_x, all_y, all_los = _collect_tensors(dataloader)
+    N, V = all_x.shape
+    print(f"  N={N}, V={V}")
+
+    # Batch size for forward passes
+    batch_size: int = getattr(dataloader, "batch_size", None) or 256
 
     # Variable names
     if config.variable_names is not None:
         if len(config.variable_names) != V:
-            raise ValueError(f"variable_names length ({len(config.variable_names)}) must match V ({V}).")
+            raise ValueError(
+                f"variable_names length ({len(config.variable_names)}) must match V ({V})."
+            )
         var_names = config.variable_names
     else:
         var_names = [f"var_{j}" for j in range(V)]
 
-    # ✅ baseline(1회) + (V nodes * R) + (LOS * R)
+    # Progress bar: 1 baseline + (V+1) features × num_repeats
     total_steps = 1 + (V + 1) * config.num_repeats
-
-    # ✅ stdout 말고 stderr로 강제 출력 (IDE/로그에 묻히는 문제 방지)
     pbar = tqdm(
         total=total_steps,
         desc="Permutation importance",
@@ -258,98 +258,87 @@ def compute_permutation_importance(
         mininterval=0.1,
     )
 
+    edge_index = edge_index.to(device)
+
     try:
-        # ✅ Baseline AUC (진행률 포함)
-        print("computing baseline auc...")
-        baseline_auc = _compute_auc(
-            model=model,
-            dataloader=dataloader,
-            edge_index=edge_index,
-            device=device,
-            mutate_fn=None,
-            seed=config.seed,
+        # Baseline AUC
+        print("Computing baseline AUC...")
+        baseline_auc = _run_auc_on_tensors(
+            model, all_x, all_y, all_los, edge_index, device, batch_size
         )
         pbar.update(1)
         pbar.set_postfix_str(f"baseline_auc={baseline_auc:.4f}")
 
         rows: List[Dict[str, Any]] = []
 
-        # Node(variable) importances
+        # Node (variable) importances — global shuffle
         for j in range(V):
             perm_aucs: List[float] = []
+            saved_col = all_x[:, j].clone()  # save original column once
 
             for r in range(config.num_repeats):
-                def mutate(x: Tensor, los: Tensor, rng: torch.Generator, node_idx=j) -> Tuple[Tensor, Tensor]:
-                    return _permute_node_feature(x, node_idx=node_idx, rng=rng), los
+                rng = torch.Generator()
+                rng.manual_seed(config.seed + 1000 * j + r)
 
-                auc_p = _compute_auc(
-                    model=model,
-                    dataloader=dataloader,
-                    edge_index=edge_index,
-                    device=device,
-                    mutate_fn=mutate,
-                    seed=config.seed + 1000 * j + r,
+                # Global permutation of variable j — in-place to avoid full clone
+                perm = torch.randperm(N, generator=rng)
+                all_x[:, j] = saved_col[perm]
+
+                auc_p = _run_auc_on_tensors(
+                    model, all_x, all_y, all_los, edge_index, device, batch_size
                 )
                 perm_aucs.append(auc_p)
                 pbar.update(1)
 
-            perm_mean = float(np.nanmean(perm_aucs))
+            all_x[:, j] = saved_col  # restore column
+
             imp_vals = [
                 baseline_auc - a
                 for a in perm_aucs
-                if not np.isnan(a) and not np.isnan(baseline_auc)
+                if not (np.isnan(a) or np.isnan(baseline_auc))
             ]
-            imp_mean = float(np.nanmean(imp_vals)) if len(imp_vals) else float("nan")
-            imp_std = float(np.nanstd(imp_vals)) if len(imp_vals) else float("nan")
-
             rows.append(
                 dict(
                     feature=var_names[j],
                     kind="node",
                     index=j,
                     baseline_auc=baseline_auc,
-                    perm_auc_mean=perm_mean,
-                    importance_mean=imp_mean,
-                    importance_std=imp_std,
+                    perm_auc_mean=float(np.nanmean(perm_aucs)),
+                    importance_mean=float(np.nanmean(imp_vals)) if imp_vals else float("nan"),
+                    importance_std=float(np.nanstd(imp_vals)) if imp_vals else float("nan"),
                     num_repeats=config.num_repeats,
                 )
             )
 
-        # LOS importance
+        # LOS importance — global shuffle
         perm_aucs_los: List[float] = []
         for r in range(config.num_repeats):
-            def mutate_los(x: Tensor, los: Tensor, rng: torch.Generator) -> Tuple[Tensor, Tensor]:
-                return x, _permute_los(los, rng=rng)
+            rng = torch.Generator()
+            rng.manual_seed(config.seed + 999999 + r)
 
-            auc_p = _compute_auc(
-                model=model,
-                dataloader=dataloader,
-                edge_index=edge_index,
-                device=device,
-                mutate_fn=mutate_los,
-                seed=config.seed + 999999 + r,
+            perm = torch.randperm(N, generator=rng)
+            los_perm = all_los[perm]
+
+            auc_p = _run_auc_on_tensors(
+                model, all_x, all_y, los_perm, edge_index, device, batch_size
             )
             perm_aucs_los.append(auc_p)
             pbar.update(1)
 
-        perm_mean = float(np.nanmean(perm_aucs_los))
-        imp_vals = [
+        imp_vals_los = [
             baseline_auc - a
             for a in perm_aucs_los
-            if not np.isnan(a) and not np.isnan(baseline_auc)
+            if not (np.isnan(a) or np.isnan(baseline_auc))
         ]
-        imp_mean = float(np.nanmean(imp_vals)) if len(imp_vals) else float("nan")
-        imp_std = float(np.nanstd(imp_vals)) if len(imp_vals) else float("nan")
-
         rows.append(
             dict(
                 feature="LOS",
                 kind="los",
                 index=None,
                 baseline_auc=baseline_auc,
-                perm_auc_mean=perm_mean,
-                importance_mean=imp_mean,
-                importance_std=imp_std,
+                perm_auc_mean=float(np.nanmean(perm_aucs_los)),
+                importance_mean=float(np.nanmean(imp_vals_los)) if imp_vals_los else float("nan"),
+                importance_std=float(np.nanstd(imp_vals_los)) if imp_vals_los else float("nan"),
                 num_repeats=config.num_repeats,
             )
         )
@@ -360,14 +349,3 @@ def compute_permutation_importance(
     df = pd.DataFrame(rows)
     df = df.sort_values("importance_mean", ascending=False, na_position="last").reset_index(drop=True)
     return df
-
-
-if __name__ == "__main__":
-    # model = ... (load weights)
-    # test_loader = ...  # yields (x, los, y)
-    # edge_index = ...   # fixed tensor
-    #
-    # cfg = PermutationImportanceConfig(num_repeats=10, seed=42, variable_names=[...])
-    # df = compute_permutation_importance(model, test_loader, edge_index=edge_index, device="cuda", config=cfg)
-    # print(df.head(30))
-    pass

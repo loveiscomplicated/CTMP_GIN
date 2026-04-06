@@ -1,96 +1,96 @@
 # permutation_main.py
+
+"""
+  ---
+  최종 실행 순서
+
+# Step 1: k-fold CV 모델들에서 GatedFusion 가중치 추출
+python src/analysis/extract_gated_fusion_kfold.py --run_name "20260302-143833__ctmp_gin__bs=256__lr=2.00e-04__seed=1__cv=5__test=0.15" --device mps
+# → src/analysis/gated_fusion_w_los_kfold.csv 생성
+
+# Step 2: LOS 그룹 결정 (k-fold CSV 자동 우선 사용)
+python src/analysis/los_group_detection.py
+# → src/analysis/los_groups.json + 시각화 생성
+
+# Step 3: PI 실행
+python src/explainers/permutation_main.py --run_name "20260302-143833__ctmp_gin__bs=256__lr=2.00e-04__seed=1__cv=5__test=0.15" --fold all --device mps --num_repeats 5 --max_test_samples 30000
+
+"""
+import json
 import os
 import sys
 from pathlib import Path
 import argparse
 import yaml
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Subset
 
-project_root = Path(__file__).resolve().parent
-sys.path.insert(0, str(project_root.parent))
+project_root = Path(__file__).resolve().parent.parent.parent  # Phase_2_public/
+sys.path.insert(0, str(project_root))
 
 from src.data_processing.tensor_dataset import TEDSTensorDataset
-from src.data_processing.data_utils import train_test_split_stratified
-from src.models.factory import build_model
-from src.trainers.base import load_checkpoint
-from src.utils.seed_set import set_seed
+from src.data_processing.splits import (
+    holdout_test_split_stratified,
+    kfold_stratified,
+)
+from src.models.factory import build_model, build_edge
 from src.utils.device_set import device_set
-from src.trainers.utils.early_stopper import EarlyStopper
 
 from src.explainers.permutation_importance import (
     PermutationImportanceConfig,
     compute_permutation_importance,
 )
 
-# stability utils: src에 있으면 그걸 쓰고, 없으면 같은 폴더의 stablity_report.py 사용
 try:
     from src.explainers.stablity_report import (
-        stability_report,
-        print_stability_report,
-        unstable_variables_report,
-        print_unstable_report_with_names,
         importance_mean_std_table,
     )
 except Exception:
     from stablity_report import (
-        stability_report,
-        print_stability_report,
-        unstable_variables_report,
-        print_unstable_report_with_names,
         importance_mean_std_table,
     )
 
 
-cur_dir = os.path.dirname(__file__)
+cur_dir = os.path.dirname(os.path.abspath(__file__))
 root = os.path.join(cur_dir, "..", "data")
-save_path = os.path.join(cur_dir, "results", "permutation")
-os.makedirs(save_path, exist_ok=True)
+save_base = os.path.join(cur_dir, "results", "permutation")
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    # p.add_argument("--config", type=str, required=True)
 
-    # 기존 override 옵션들
-    p.add_argument("--is_mi_based_edge", type=int, default=None)
+    p.add_argument(
+        "--run_name",
+        type=str,
+        required=True,
+        help="Run directory name under runs/protected/k_fold_CV/",
+    )
+    p.add_argument(
+        "--fold",
+        type=str,
+        default="all",
+        help="Fold to evaluate: integer 0-4 or 'all'",
+    )
+    p.add_argument(
+        "--los_groups",
+        type=str,
+        default=None,
+        help="Path to JSON file with LOS group definitions (optional)",
+    )
     p.add_argument("--device", type=str, default="mps")
     p.add_argument("--batch_size", type=int, default=None)
-    p.add_argument("--learning_rate", type=float, default=None)
-    p.add_argument("--epochs", type=int, default=None)
-    p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--decision_threshold", type=float, default=None)
-    p.add_argument("--binary", type=int, default=None)
-
-    # ✅ sampling + permutation config
     p.add_argument(
-        "--sample_ratio",
-        type=float,
-        default=0.1,
-        help="test set sampling ratio per seed (e.g., 0.05)",
+        "--num_repeats", type=int, default=5, help="Permutation repeats per feature"
     )
     p.add_argument(
-        "--max_samples",
+        "--max_test_samples",
         type=int,
         default=None,
-        help="cap sampled test examples (after ratio)",
-    )
-    p.add_argument(
-        "--seeds",
-        type=str,
-        default="0,1,2",
-        help="comma-separated seeds for stability (e.g., 0,1,2)",
-    )
-    p.add_argument(
-        "--num_repeats", type=int, default=5, help="permutation repeats per feature"
-    )
-    p.add_argument(
-        "--save_prefix",
-        type=str,
-        default="permutation",
-        help="prefix for saved csv files",
+        help="Cap test set size for PI (e.g. 30000). Stratified random sample. "
+        "None = use full test set.",
     )
 
     return p.parse_args()
@@ -101,60 +101,146 @@ def load_yaml(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def override_cfg(cfg: dict, args) -> dict:
-    if args.device is not None:
-        cfg["device"] = args.device
-    if args.is_mi_based_edge is not None:
-        cfg.setdefault("edge", {})["is_mi_based"] = bool(args.is_mi_based_edge)
-    if args.batch_size is not None:
-        cfg.setdefault("train", {})["batch_size"] = args.batch_size
-    if args.learning_rate is not None:
-        cfg.setdefault("train", {})["learning_rate"] = args.learning_rate
-    if args.epochs is not None:
-        cfg.setdefault("train", {})["epochs"] = args.epochs
-    if args.seed is not None:
-        cfg.setdefault("train", {})["seed"] = args.seed
-    if args.binary is not None:
-        cfg.setdefault("train", {})["binary"] = bool(args.binary)
-    if args.decision_threshold is not None:
-        cfg.setdefault("train", {})["decision_threshold"] = args.decision_threshold
-    return cfg
+def _parse_fold_arg(fold_str: str, n_folds: int) -> list[int]:
+    if fold_str.strip().lower() == "all":
+        return list(range(n_folds))
+    try:
+        fold_id = int(fold_str.strip())
+        if not (0 <= fold_id < n_folds):
+            raise ValueError(f"fold {fold_id} out of range [0, {n_folds})")
+        return [fold_id]
+    except ValueError:
+        raise ValueError(f"--fold must be an integer or 'all', got: {fold_str!r}")
 
 
-def _parse_seeds(seed_str: str) -> list[int]:
-    items = [s.strip() for s in seed_str.split(",") if s.strip()]
-    return [int(x) for x in items]
+def _load_fold_model(fold_dir: str, device: torch.device) -> tuple[nn.Module, dict]:
+    """Load model from best.pt. cfg is embedded in the checkpoint."""
+    ckpt_path = os.path.join(fold_dir, "checkpoints", "best.pt")
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    ckpt = torch.load(ckpt_path, map_location=device)
+    cfg = ckpt["cfg"]
+
+    # Override device in model params
+    cfg["model"]["params"]["device"] = str(device)
+
+    model = build_model(
+        model_name=cfg["model"]["name"], **cfg["model"].get("params", {})
+    ).to(device)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.eval()
+
+    print(f"  Loaded checkpoint: epoch={ckpt.get('epoch')}")
+    if "metrics" in ckpt and ckpt["metrics"]:
+        m = ckpt["metrics"]
+        if "val_auc" in m:
+            print(f"  val_auc={m['val_auc']:.4f}")
+
+    return model, cfg
 
 
-def build_sampled_test_loader(
-    dataset: torch.utils.data.Dataset,
-    test_indices: list[int],
-    sample_ratio: float,
+def _reconstruct_test_idx(dataset: TEDSTensorDataset, cfg: dict) -> np.ndarray:
+    """
+    Reproduce the same test_idx used during k-fold CV training.
+    holdout_test_split_stratified is called once before the fold loop,
+    so test_idx is identical across all folds.
+    """
+    seed = cfg["train"]["seed"]
+    test_ratio = cfg["train"]["test_ratio"]
+    _, test_idx = holdout_test_split_stratified(
+        dataset, test_ratio=test_ratio, seed=seed
+    )
+    return test_idx
+
+
+def _subsample_test_idx(
+    test_idx: np.ndarray,
+    max_samples: int,
     seed: int,
+) -> np.ndarray:
+    """Randomly subsample test_idx to at most max_samples indices."""
+    if len(test_idx) <= max_samples:
+        return test_idx
+    rng = np.random.default_rng(seed)
+    chosen = rng.choice(len(test_idx), size=max_samples, replace=False)
+    return test_idx[np.sort(chosen)]
+
+
+def _build_fold_edge_index(
+    dataset: TEDSTensorDataset,
+    cfg: dict,
+    fold_id: int,
+    device: torch.device,
+    data_root: str,
+) -> torch.Tensor:
+    """
+    Reconstruct the exact edge_index used during training for fold_id.
+
+    Mirrors run_kfold_cv.py:
+        trainval_idx, test_idx = holdout_test_split_stratified(...)
+        for fold, train_idx, val_idx in kfold_stratified(...):
+            train_df = dataset.processed_df.iloc[train_idx]
+            edge_index = build_edge(model_name, root, seed, train_df, ...)
+    """
+    seed = cfg["train"]["seed"]
+    test_ratio = cfg["train"]["test_ratio"]
+    n_folds = cfg["train"]["n_folds"]
+    model_name = cfg["model"]["name"]
+    batch_size = cfg["train"]["batch_size"]
+
+    labels = np.array([dataset[i][1] for i in range(len(dataset))])
+    trainval_idx, _ = holdout_test_split_stratified(
+        dataset, test_ratio=test_ratio, seed=seed, labels=labels
+    )
+
+    # num_nodes: matches run_kfold_cv.py logic
+    if model_name == "gin":
+        num_nodes = len(dataset.col_info[0])
+    else:
+        num_nodes = len(dataset.col_info[2])  # ad_col_index length
+
+    train_idx = None
+    for fold, t_idx, _ in kfold_stratified(
+        trainval_idx=trainval_idx, labels=labels, n_folds=n_folds, seed=seed
+    ):
+        if fold == fold_id:
+            train_idx = t_idx
+            break
+
+    if train_idx is None:
+        raise ValueError(f"fold_id={fold_id} not found in kfold_stratified")
+
+    train_df = dataset.processed_df.iloc[train_idx]
+
+    result = build_edge(
+        model_name=model_name,
+        root=data_root,
+        seed=seed,
+        train_df=train_df,
+        num_nodes=num_nodes,
+        batch_size=batch_size,
+        **cfg.get("edge", {}),
+    )
+    # build_edge may return (edge_index, edge_attr) or just edge_index
+    edge_index = result[0] if isinstance(result, tuple) else result
+    return edge_index.to(device)
+
+
+def _build_test_loader(
+    dataset: TEDSTensorDataset,
+    test_idx,
     batch_size: int,
     num_workers: int,
-    max_samples: int | None = None,
 ) -> DataLoader:
-    n_total = len(test_indices)
-    n = int(n_total * sample_ratio)
-    n = max(n, 1)
-    if max_samples is not None:
-        n = min(n, max_samples)
-
-    g = torch.Generator()
-    g.manual_seed(seed)
-    perm = torch.randperm(n_total, generator=g)
-    chosen = [test_indices[i] for i in perm[:n].tolist()]
-
-    subset = Subset(dataset, chosen)
-
-    # permutation_importance는 shuffle=False여도 됨 (AUC 평가이므로)
+    # drop_last=False: we need ALL test samples for PI evaluation
+    indices = test_idx.tolist() if hasattr(test_idx, "tolist") else list(test_idx)
     return DataLoader(
-        subset,
+        Subset(dataset, indices),
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=False,
+        drop_last=False,
     )
 
 
@@ -177,171 +263,189 @@ def df_to_importance_vector(df, V: int) -> torch.Tensor:
 
 
 def main():
-    # --------@@@@ adjust model path !!! @@@@--------
-    runs_dir = os.path.join(
-        cur_dir,
-        "..",
-        "..",
-        "runs",
-    )
-    runs_dir = os.path.abspath(runs_dir)
-
-    fold_dir = os.path.join(
-        runs_dir,
-        "protected",
-        "k_fold_CV",
-        "20260302-143833__ctmp_gin__bs=256__lr=2.00e-04__seed=1__cv=5__test=0.15",
-        "folds",
-        "fold_0",
-    )
-    fold_dir = os.path.abspath(fold_dir)
-
-    model_path = os.path.join(fold_dir, "checkpoints", "best.pt")
-
-    config_path = os.path.join(fold_dir, "config.final.yaml")
-
-    config = load_yaml(config_path)
     args = parse_args()
-    cfg = override_cfg(config, args)
-    cfg["model"]["params"]["device"] = cfg["device"]
 
-    # seed (dataset split seed)
-    split_seed = cfg["train"].get("seed", 42)
-    set_seed(split_seed)
+    # ---- Resolve paths ----
+    project_root_dir = Path(cur_dir).resolve().parent.parent
+    runs_base = project_root_dir / "runs" / "protected" / "k_fold_CV"
+    run_dir = runs_base / args.run_name
 
-    device = device_set(cfg["device"])
+    if not run_dir.exists():
+        raise FileNotFoundError(f"Run directory not found: {run_dir}")
 
-    # dataset
+    # Read fold_0 config for shared settings (seed, test_ratio, n_folds, etc.)
+    fold_0_cfg_path = run_dir / "folds" / "fold_0" / "config.final.yaml"
+    fold_0_cfg = load_yaml(str(fold_0_cfg_path))
+    n_folds = fold_0_cfg["train"].get("n_folds", 5)
+
+    folds_to_run = _parse_fold_arg(args.fold, n_folds)
+    print(f"Run: {args.run_name}")
+    print(f"Folds to evaluate: {folds_to_run}")
+
+    # ---- Device ----
+    device = device_set(args.device)
+
+    # ---- Dataset (shared across folds) ----
     dataset = TEDSTensorDataset(
         root=root,
-        binary=cfg["train"].get("binary", True),
-        ig_label=cfg["train"].get("ig_label", False),
+        binary=fold_0_cfg["train"].get("binary", True),
+        ig_label=fold_0_cfg["train"].get("ig_label", False),
     )
-    cfg["model"]["params"]["col_info"] = dataset.col_info
-    cfg["model"]["params"]["num_classes"] = dataset.num_classes
-
-    # split
-    split_ratio = [
-        cfg["train"]["train_ratio"],
-        cfg["train"]["val_ratio"],
-        cfg["train"]["test_ratio"],
-    ]
-    train_loader, val_loader, test_loader, idx = train_test_split_stratified(
-        dataset=dataset,
-        batch_size=cfg["train"]["batch_size"],
-        ratio=split_ratio,
-        seed=split_seed,
-        num_workers=cfg["train"]["num_workers"],
-    )
-    train_idx, val_idx, test_idx = idx  # type: ignore
-
-    # model
-    model = build_model(
-        model_name=cfg["model"]["name"], **cfg["model"].get("params", {})
-    ).to(device)
-
-    if cfg["train"]["binary"]:
-        _ = nn.BCEWithLogitsLoss()
-    else:
-        _ = nn.CrossEntropyLoss()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["learning_rate"])
-    scheduler = ReduceLROnPlateau(
-        optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"]
-    )
-    _ = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
-
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Checkpoint not found: {model_path}")
-
-    start_epoch, best_loss = load_checkpoint(
-        model=model,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        filename=model_path,
-        map_location=device,
-    )
-    model.eval()
-    print(f"Loaded checkpoint from {model_path}")
-    print(f"Checkpoint start_epoch: {start_epoch}, best_loss: {best_loss}")
-
-    # edge_index (fixed)
-    import pickle
-
-    with open(os.path.join(cur_dir, "edge_index.pickle"), "rb") as f:
-        edge_index = pickle.load(f)
-    edge_index = edge_index.to(device)
-
-    # 변수 이름 + LOS 이름
     col_names = dataset.col_info[0]
     V = len(col_names)
     names_with_los = col_names + ["LOS"]
 
-    # ✅ seed별로: (1) test subset 샘플링 -> (2) permutation importance -> (3) vector 저장
-    seeds = _parse_seeds(args.seeds)
-    outs: list[torch.Tensor] = []
-    dfs = []
-
-    for s in seeds:
-        print(
-            f"\n=== Permutation on sampled test set | seed={s} | sample_ratio={args.sample_ratio} ==="
+    # ---- Reconstruct test_idx (same for all folds) ----
+    test_idx = _reconstruct_test_idx(dataset, fold_0_cfg)
+    print(f"Test set size (full): {len(test_idx)}")
+    if args.max_test_samples is not None:
+        test_idx = _subsample_test_idx(
+            test_idx, args.max_test_samples, seed=fold_0_cfg["train"]["seed"]
         )
-        set_seed(s)
+        print(f"Test set size (subsampled): {len(test_idx)}")
 
-        sampled_loader = build_sampled_test_loader(
+    # ---- Optional LOS groups ----
+    los_groups = None
+    if args.los_groups:
+        with open(args.los_groups, "r") as f:
+            los_groups = json.load(f)
+        assert isinstance(los_groups, dict)
+        print(f"LOS groups loaded: {list(los_groups.keys())}")
+
+    # ---- Output directory ----
+    out_dir = Path(save_base) / args.run_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Per-fold PI computation ----
+    fold_vecs: list[torch.Tensor] = []
+    # group_vecs[gname] = list of importance vectors, one per fold
+    group_vecs: dict[str, list[torch.Tensor]] = {}
+    if los_groups is not None:
+        group_vecs = {gname: [] for gname in los_groups}
+
+    for fold_id in folds_to_run:
+        fold_dir = str(run_dir / "folds" / f"fold_{fold_id}")
+        print(f"\n=== Fold {fold_id} ===")
+
+        model, fold_cfg = _load_fold_model(fold_dir, device)
+
+        batch_size = args.batch_size or fold_cfg["train"]["batch_size"]
+        num_workers = fold_cfg["train"].get("num_workers", 0)
+
+        # Build fold-specific edge_index (MI-based, from this fold's train_df)
+        print(f"  Building edge_index for fold {fold_id}...")
+        edge_index = _build_fold_edge_index(
             dataset=dataset,
-            test_indices=list(test_idx),
-            sample_ratio=args.sample_ratio,
-            seed=s,
-            batch_size=cfg["train"]["batch_size"],
-            num_workers=cfg["train"]["num_workers"],
-            max_samples=args.max_samples,
+            cfg=fold_cfg,
+            fold_id=fold_id,
+            device=device,
+            data_root=root,
         )
+        print(
+            f"  edge_index shape: {tuple(edge_index.shape)}, max node: {edge_index.max().item()}"
+        )
+
+        test_loader = _build_test_loader(dataset, test_idx, batch_size, num_workers)
 
         perm_cfg = PermutationImportanceConfig(
             num_repeats=args.num_repeats,
-            seed=s,
+            seed=fold_cfg["train"]["seed"],
             variable_names=col_names,
         )
 
         df = compute_permutation_importance(
             model=model,
-            dataloader=sampled_loader,
+            dataloader=test_loader,
             edge_index=edge_index,
             device=device,
             config=perm_cfg,
         )
 
-        out_csv = os.path.join(
-            save_path, f"{args.save_prefix}_seed{s}_ratio{args.sample_ratio}.csv"
-        )
+        out_csv = out_dir / f"fold_{fold_id}_pi.csv"
         df.to_csv(out_csv, index=False)
         print(f"Saved: {out_csv}")
+        print(f"  baseline_auc = {df['baseline_auc'].iloc[0]:.4f}")
+        print(f"  Top 5 features:")
+        print(
+            df[["feature", "importance_mean", "importance_std"]]
+            .head(5)
+            .to_string(index=False)
+        )
 
-        vec = df_to_importance_vector(df, V=V)  # [V+1]
-        outs.append(vec)
-        dfs.append(df)
+        fold_vecs.append(df_to_importance_vector(df, V=V))
 
-    # ✅ stability report (permutation vector 기준)
-    print("\n=== Building mean±std table across seeds ===")
-    df_ms = importance_mean_std_table(outs, names_with_los)
-    out_ms_csv = os.path.join(
-        save_path, f"{args.save_prefix}_mean_std_ratio{args.sample_ratio}.csv"
-    )
-    df_ms.to_csv(out_ms_csv, index=False)
-    print(f"Saved: {out_ms_csv}")
+        # ---- LOS group sub-analysis (optional) ----
+        if los_groups is not None:
+            los_tensor = dataset.LOS
 
-    print("\n=== Top 30 (mean±std) ===")
-    print(df_ms.head(30).to_string(index=False))
+            for gname, los_vals in los_groups.items():
+                los_set = set(los_vals)
+                group_idx = [
+                    i for i in test_idx if int(round(float(los_tensor[i]))) in los_set
+                ]
+                if not group_idx:
+                    print(
+                        f"  Warning: no test samples for {gname} (LOS={los_vals}), skipping"
+                    )
+                    continue
 
-    report = stability_report(outs, ks=[10, 20, 30])
-    print_stability_report(report, ks=[10, 20, 30])
+                print(f"\n  --- {gname} (LOS={los_vals}, n={len(group_idx)}) ---")
+                g_loader = _build_test_loader(
+                    dataset, group_idx, batch_size, num_workers
+                )
 
-    rep20 = unstable_variables_report(outs, k=20)
-    print_unstable_report_with_names(rep20, names_with_los)
+                df_g = compute_permutation_importance(
+                    model=model,
+                    dataloader=g_loader,
+                    edge_index=edge_index,
+                    device=device,
+                    config=perm_cfg,
+                    show_progress=False,
+                )
 
-    rep30 = unstable_variables_report(outs, k=30)
-    print_unstable_report_with_names(rep30, names_with_los)
+                out_g_csv = out_dir / f"fold_{fold_id}_{gname}_pi.csv"
+                df_g.to_csv(out_g_csv, index=False)
+                print(f"  Saved: {out_g_csv}")
+
+                group_vecs[gname].append(df_to_importance_vector(df_g, V=V))
+
+    # ---- Cross-fold aggregate: overall ----
+    if len(fold_vecs) > 1:
+        print("\n=== Cross-fold mean±std (overall) ===")
+        df_ms = importance_mean_std_table(
+            fold_vecs,
+            names_with_los,
+            save_path=str(out_dir),
+            filename="all_folds_pi.csv",
+        )
+        print("\nTop 30:")
+        print(df_ms.head(30).to_string(index=False))
+    elif len(fold_vecs) == 1:
+        single_fold_id = folds_to_run[0]
+        df_single = pd.read_csv(out_dir / f"fold_{single_fold_id}_pi.csv")
+        print(f"\n=== Fold {single_fold_id} Top 30 ===")
+        print(df_single.head(30).to_string(index=False))
+
+    # ---- Cross-fold aggregate: per group ----
+    if los_groups is not None:
+        for gname, vecs in group_vecs.items():
+            if len(vecs) > 1:
+                print(f"\n=== Cross-fold mean±std: {gname} ===")
+                df_g_ms = importance_mean_std_table(
+                    vecs,
+                    names_with_los,
+                    save_path=str(out_dir),
+                    filename=f"{gname}_all_folds_pi.csv",
+                )
+                print(f"  Top 10:")
+                print(df_g_ms.head(10).to_string(index=False))
+            elif len(vecs) == 1:
+                print(f"\n=== {gname} (single fold) Top 10 ===")
+                print(
+                    pd.read_csv(out_dir / f"fold_{folds_to_run[0]}_{gname}_pi.csv")
+                    .head(10)
+                    .to_string(index=False)
+                )
 
 
 if __name__ == "__main__":
