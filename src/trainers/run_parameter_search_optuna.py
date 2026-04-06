@@ -25,9 +25,8 @@ def suggest_ctmp_gin_params(trial, cfg):
     cfg["model"]["params"]["embedding_dim"] = trial.suggest_categorical("embedding_dim", [16, 32, 64])
     cfg["model"]["params"]["los_embedding_dim"] = trial.suggest_categorical("los_embedding_dim", [4, 8, 16])
 
-    gin_hidden = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
-    cfg["model"]["params"]["gin_hidden_channel"] = gin_hidden
-    cfg["model"]["params"]["gin_hidden_channel_2"] = gin_hidden
+    cfg["model"]["params"]["gin_hidden_channel"] = trial.suggest_categorical("gin_hidden_channel", [16, 32, 64, 96])
+    cfg["model"]["params"]["gin_hidden_channel_2"] = trial.suggest_categorical("gin_hidden_channel_2", [16, 32, 64, 96])
 
     cfg["model"]["params"]["gin_1_layers"] = trial.suggest_int("gin_1_layers", 1, 3)
     cfg["model"]["params"]["gin_2_layers"] = trial.suggest_int("gin_2_layers", 1, 3)
