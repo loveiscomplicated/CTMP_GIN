@@ -30,3 +30,5 @@ wandb
 Gated_Fusion_weight_seed_1.csv
 gated_fustion_w_los_seed_1.csv
 src/data/physionet.org
+settings.local.json
+.Rhistory
