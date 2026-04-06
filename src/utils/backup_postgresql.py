@@ -18,8 +18,13 @@ def backup_to_sql(model_name):
     for summary in summaries:
         study_name = summary.study_name
         print(f"복사 중: {study_name} -> {sqlite_path}")
-        
+
         try:
+            # 이미 존재하는 study는 삭제 후 재복사 (덮어쓰기)
+            existing = [s.study_name for s in optuna.get_all_study_summaries(storage=sqlite_url)]
+            if study_name in existing:
+                optuna.delete_study(study_name=study_name, storage=sqlite_url)
+
             optuna.copy_study(
                 from_study_name=study_name,
                 from_storage=postgres_url,
