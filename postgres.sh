@@ -85,7 +85,7 @@ fi
 # Create cluster if missing
 if ! pg_lsclusters | awk '{print $1" "$2}' | grep -q "^${PG_VER} ${CLUSTER_NAME}$"; then
   log "Cluster ${PG_VER}/${CLUSTER_NAME} not found -> creating default cluster"
-  pg_createcluster "${PG_VER}" "${CLUSTER_NAME}"
+  pg_createcluster --port "${PG_PORT}" "${PG_VER}" "${CLUSTER_NAME}"
 fi
 
 # Start cluster

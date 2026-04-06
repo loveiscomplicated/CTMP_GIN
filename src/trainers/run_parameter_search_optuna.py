@@ -313,7 +313,7 @@ if __name__ == "__main__":
     # 1. 모델명 미리 파악 (백업 파일명용)
     base_cfg = load_cfg(config_path)
     model_name = base_cfg["model"]["name"]
-    db = "sqlite"
+    db = "postgresql"
     try:    
         if args.init_only:
             # init 시에도 동일한 storage 논리 적용

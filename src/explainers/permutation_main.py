@@ -49,17 +49,14 @@ root = os.path.join(cur_dir, "..", "data")
 save_path = os.path.join(cur_dir, "results", "permutation")
 os.makedirs(save_path, exist_ok=True)
 
-# --------@@@@ adjust model path !!! @@@@--------
-model_path = os.path.join(cur_dir, "..", "..", "runs", "temp_ctmp_gin_ckpt", "ctmp_epoch_36_loss_0.2738.pth")
-
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", type=str, required=True)
+    # p.add_argument("--config", type=str, required=True)
 
     # 기존 override 옵션들
     p.add_argument("--is_mi_based_edge", type=int, default=None)
-    p.add_argument("--device", type=str, default=None)
+    p.add_argument("--device", type=str, default="mps")
     p.add_argument("--batch_size", type=int, default=None)
     p.add_argument("--learning_rate", type=float, default=None)
     p.add_argument("--epochs", type=int, default=None)
@@ -68,11 +65,33 @@ def parse_args():
     p.add_argument("--binary", type=int, default=None)
 
     # ✅ sampling + permutation config
-    p.add_argument("--sample_ratio", type=float, default=0.1, help="test set sampling ratio per seed (e.g., 0.05)")
-    p.add_argument("--max_samples", type=int, default=None, help="cap sampled test examples (after ratio)")
-    p.add_argument("--seeds", type=str, default="0,1,2", help="comma-separated seeds for stability (e.g., 0,1,2)")
-    p.add_argument("--num_repeats", type=int, default=5, help="permutation repeats per feature")
-    p.add_argument("--save_prefix", type=str, default="permutation", help="prefix for saved csv files")
+    p.add_argument(
+        "--sample_ratio",
+        type=float,
+        default=0.1,
+        help="test set sampling ratio per seed (e.g., 0.05)",
+    )
+    p.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="cap sampled test examples (after ratio)",
+    )
+    p.add_argument(
+        "--seeds",
+        type=str,
+        default="0,1,2",
+        help="comma-separated seeds for stability (e.g., 0,1,2)",
+    )
+    p.add_argument(
+        "--num_repeats", type=int, default=5, help="permutation repeats per feature"
+    )
+    p.add_argument(
+        "--save_prefix",
+        type=str,
+        default="permutation",
+        help="prefix for saved csv files",
+    )
 
     return p.parse_args()
 
@@ -158,8 +177,33 @@ def df_to_importance_vector(df, V: int) -> torch.Tensor:
 
 
 def main():
+    # --------@@@@ adjust model path !!! @@@@--------
+    runs_dir = os.path.join(
+        cur_dir,
+        "..",
+        "..",
+        "runs",
+    )
+    runs_dir = os.path.abspath(runs_dir)
+
+    fold_dir = os.path.join(
+        runs_dir,
+        "protected",
+        "k_fold_CV",
+        "20260302-143833__ctmp_gin__bs=256__lr=2.00e-04__seed=1__cv=5__test=0.15",
+        "folds",
+        "fold_0",
+    )
+    fold_dir = os.path.abspath(fold_dir)
+
+    model_path = os.path.join(fold_dir, "checkpoints", "best.pt")
+
+    config_path = os.path.join(fold_dir, "config.final.yaml")
+
+    config = load_yaml(config_path)
     args = parse_args()
-    cfg = override_cfg(load_yaml(args.config), args)
+    cfg = override_cfg(config, args)
+    cfg["model"]["params"]["device"] = cfg["device"]
 
     # seed (dataset split seed)
     split_seed = cfg["train"].get("seed", 42)
@@ -177,7 +221,11 @@ def main():
     cfg["model"]["params"]["num_classes"] = dataset.num_classes
 
     # split
-    split_ratio = [cfg["train"]["train_ratio"], cfg["train"]["val_ratio"], cfg["train"]["test_ratio"]]
+    split_ratio = [
+        cfg["train"]["train_ratio"],
+        cfg["train"]["val_ratio"],
+        cfg["train"]["test_ratio"],
+    ]
     train_loader, val_loader, test_loader, idx = train_test_split_stratified(
         dataset=dataset,
         batch_size=cfg["train"]["batch_size"],
@@ -188,7 +236,9 @@ def main():
     train_idx, val_idx, test_idx = idx  # type: ignore
 
     # model
-    model = build_model(model_name=cfg["model"]["name"], **cfg["model"].get("params", {})).to(device)
+    model = build_model(
+        model_name=cfg["model"]["name"], **cfg["model"].get("params", {})
+    ).to(device)
 
     if cfg["train"]["binary"]:
         _ = nn.BCEWithLogitsLoss()
@@ -196,7 +246,9 @@ def main():
         _ = nn.CrossEntropyLoss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["train"]["learning_rate"])
-    scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
+    scheduler = ReduceLROnPlateau(
+        optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"]
+    )
     _ = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
 
     if not os.path.exists(model_path):
@@ -215,6 +267,7 @@ def main():
 
     # edge_index (fixed)
     import pickle
+
     with open(os.path.join(cur_dir, "edge_index.pickle"), "rb") as f:
         edge_index = pickle.load(f)
     edge_index = edge_index.to(device)
@@ -230,7 +283,9 @@ def main():
     dfs = []
 
     for s in seeds:
-        print(f"\n=== Permutation on sampled test set | seed={s} | sample_ratio={args.sample_ratio} ===")
+        print(
+            f"\n=== Permutation on sampled test set | seed={s} | sample_ratio={args.sample_ratio} ==="
+        )
         set_seed(s)
 
         sampled_loader = build_sampled_test_loader(
@@ -257,7 +312,9 @@ def main():
             config=perm_cfg,
         )
 
-        out_csv = os.path.join(save_path, f"{args.save_prefix}_seed{s}_ratio{args.sample_ratio}.csv")
+        out_csv = os.path.join(
+            save_path, f"{args.save_prefix}_seed{s}_ratio{args.sample_ratio}.csv"
+        )
         df.to_csv(out_csv, index=False)
         print(f"Saved: {out_csv}")
 
@@ -268,7 +325,9 @@ def main():
     # ✅ stability report (permutation vector 기준)
     print("\n=== Building mean±std table across seeds ===")
     df_ms = importance_mean_std_table(outs, names_with_los)
-    out_ms_csv = os.path.join(save_path, f"{args.save_prefix}_mean_std_ratio{args.sample_ratio}.csv")
+    out_ms_csv = os.path.join(
+        save_path, f"{args.save_prefix}_mean_std_ratio{args.sample_ratio}.csv"
+    )
     df_ms.to_csv(out_ms_csv, index=False)
     print(f"Saved: {out_ms_csv}")
 
