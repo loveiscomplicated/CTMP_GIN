@@ -3,7 +3,7 @@ import optuna
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from src.data_processing.tensor_dataset import TEDSTensorDataset, TEDSDatasetForGIN
+from src.data_processing.tensor_dataset import TEDSTensorDataset
 from src.data_processing.data_utils import train_test_split_stratified
 from src.models.factory import build_model, build_edge
 from src.trainers.base import run_train_loop
@@ -18,7 +18,7 @@ def run_single_experiment(cfg,
     report_metric = kwargs.get("report_metric", "valid_auc")
     trial = kwargs.get("trial", None)
     mi_cache_path = kwargs.get("mi_cache_path", None)
-    # edge_cached=kwargs.get("edge_cached", True)
+    # mi_cached=kwargs.get("mi_cached", True)
 
     logger = None
     if trial is None: # if not parameter searching (normal training session)
@@ -93,7 +93,7 @@ def run_single_experiment(cfg,
                             train_df=train_df,
                             num_nodes=num_nodes,
                             batch_size = cfg["train"]["batch_size"],
-                            # edge_cached=edge_cached,
+                            # mi_cached=mi_cached,
                             **cfg.get("edge", {})
                             )
     edge_index = edge_index.to(device) # type: ignore
@@ -102,6 +102,11 @@ def run_single_experiment(cfg,
         print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
         print(f'edge index: \n{edge_index}')
         print(f'edge index shape: \n{edge_index.shape}')
+
+        # Save for later analysis scripts (extract, permutation, reeval)
+        edge_index_save_path = os.path.join(run_dir, "edge_index.pt")
+        torch.save(edge_index.cpu(), edge_index_save_path)
+        print(f"edge_index saved: {edge_index_save_path}")
 
     if cfg["train"]["binary"]:
         criterion = nn.BCEWithLogitsLoss()

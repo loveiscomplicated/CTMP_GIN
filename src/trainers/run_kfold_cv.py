@@ -11,7 +11,7 @@ from src.data_processing.splits import (
     kfold_stratified,
     make_loaders,
 )
-from src.data_processing.tensor_dataset import TEDSTensorDataset, TEDSDatasetForGIN
+from src.data_processing.tensor_dataset import TEDSTensorDataset
 from src.models.factory import build_model, build_edge
 from src.trainers.base import run_train_loop
 from src.utils.experiment import (
