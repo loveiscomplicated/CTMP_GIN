@@ -25,13 +25,15 @@ from __future__ import annotations
 
 import argparse
 import os
-import pickle
 import sys
 from pathlib import Path
+
+import json
 
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.metrics import accuracy_score, roc_auc_score
 from torch.utils.data import DataLoader, Subset
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -39,8 +41,8 @@ _PROJECT_ROOT = _THIS_DIR.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.data_processing.tensor_dataset import TEDSTensorDataset
-from src.data_processing.splits import holdout_test_split_stratified
-from src.models.factory import build_model
+from src.data_processing.splits import holdout_test_split_stratified, kfold_stratified
+from src.models.factory import build_model, build_edge
 from src.utils.device_set import device_set
 
 
@@ -87,7 +89,7 @@ def _parse_fold_arg(fold_str: str, n_folds: int) -> list[int]:
 
 
 def _load_fold_model(fold_dir: str, device: torch.device):
-    ckpt_path = os.path.join(fold_dir, "checkpoints", "best.pt")
+    ckpt_path = os.path.join(fold_dir, "checkpoints", "last.pt")
     ckpt = torch.load(ckpt_path, map_location=device)
     cfg = ckpt["cfg"]
     cfg["model"]["params"]["device"] = str(device)
@@ -228,6 +230,83 @@ def aggregate_by_los(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     return agg.sort_values("LOS").reset_index(drop=True)
 
 
+def _sanity_check(
+    model: torch.nn.Module,
+    all_x: torch.Tensor,
+    all_los: torch.Tensor,
+    all_y: torch.Tensor,
+    edge_index: torch.Tensor,
+    device: torch.device,
+    batch_size: int,
+    fold_id: int,
+    run_dir: Path,
+):
+    """Compute test AUC/ACC and compare against stored cv_summary.json metrics."""
+    model.eval()
+    all_logits = []
+    N = all_x.size(0)
+    with torch.no_grad():
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            logits = model(all_x[start:end].to(device), all_los[start:end].to(device), edge_index, device=device)
+            all_logits.append(logits.cpu())
+    logits_cat = torch.cat(all_logits, dim=0).squeeze(-1)  # [N]
+    scores = torch.sigmoid(logits_cat).numpy()
+    preds = (scores >= 0.5).astype(int)
+    targets = all_y.numpy().astype(int)
+
+    auc = roc_auc_score(targets, scores)
+    acc = accuracy_score(targets, preds)
+
+    # Load stored metrics from cv_summary.json
+    summary_path = run_dir / "cv_summary.json"
+    stored_auc, stored_acc = None, None
+    if summary_path.exists():
+        with open(summary_path) as f:
+            summary = json.load(f)
+        for fr in summary.get("fold_results", []):
+            if fr.get("fold") == fold_id:
+                stored_auc = fr.get("test_auc")
+                stored_acc = fr.get("test_acc")
+                break
+
+    # --- quick diagnostic ---
+    print(f"  [Sanity] scores: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}")
+    print(f"  [Sanity] targets: pos_rate={targets.mean():.4f} ({targets.sum()}/{len(targets)})")
+    print(f"  [Sanity] preds:   pos_rate={preds.mean():.4f}")
+    # -------------------------
+    print(f"  [Sanity] recomputed  — AUC={auc:.6f}, ACC={acc:.6f}")
+    if stored_auc is not None and stored_acc is not None:
+        auc_delta = abs(auc - stored_auc)
+        acc_delta = abs(acc - stored_acc)
+        flag = " *** MISMATCH ***" if auc_delta > 0.005 else ""
+        print(f"  [Sanity] stored      — AUC={stored_auc:.6f}, ACC={stored_acc:.6f}")
+        print(f"  [Sanity] delta       — ΔAUC={auc_delta:.6f}, ΔACC={acc_delta:.6f}{flag}")
+
+
+def _get_train_df_for_fold(
+    dataset: TEDSTensorDataset,
+    labels: np.ndarray,
+    fold_cfg: dict,
+    target_fold_id: int,
+) -> pd.DataFrame:
+    """Reconstruct the train_df used for a specific fold during training."""
+    seed = fold_cfg["train"]["seed"]
+    test_ratio = fold_cfg["train"]["test_ratio"]
+    n_folds = fold_cfg["train"]["n_folds"]
+
+    trainval_idx, _ = holdout_test_split_stratified(
+        dataset, test_ratio=test_ratio, seed=seed, labels=labels
+    )
+    for fold, train_idx, _ in kfold_stratified(
+        trainval_idx=trainval_idx, labels=labels, n_folds=n_folds, seed=seed
+    ):
+        if fold == target_fold_id:
+            return dataset.processed_df.iloc[train_idx]
+
+    raise ValueError(f"fold {target_fold_id} not found in {n_folds}-fold split")
+
+
 def main():
     args = parse_args()
 
@@ -244,18 +323,32 @@ def main():
     device = device_set(args.device)
     batch_size = args.batch_size or fold_0_cfg["train"]["batch_size"]
 
-    # Dataset
+    # Dataset — mirror run_kfold_cv.py: respect remove_los and do_preprocess
     data_root = str(_PROJECT_ROOT / "src" / "data")
+    model_name = fold_0_cfg["model"]["name"]
+    remove_los = model_name not in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]
     dataset = TEDSTensorDataset(
         root=data_root,
         binary=fold_0_cfg["train"].get("binary", True),
         ig_label=fold_0_cfg["train"].get("ig_label", False),
+        remove_los=remove_los,
+        do_preprocess=fold_0_cfg["train"].get("do_preprocess", True),
     )
 
-    # Reconstruct test_idx (same for all folds)
+    # num_nodes (same logic as run_kfold_cv.py)
+    if model_name == "gin":
+        num_nodes = len(dataset.col_info[0])
+    else:
+        num_nodes = len(dataset.col_info[2])  # ad_col_index
+
+    labels = np.array([dataset[i][1] for i in range(len(dataset))])
+
+    # Reconstruct test_idx (same for all folds, seed-deterministic)
     seed = fold_0_cfg["train"]["seed"]
     test_ratio = fold_0_cfg["train"]["test_ratio"]
-    _, test_idx = holdout_test_split_stratified(dataset, test_ratio=test_ratio, seed=seed)
+    _, test_idx = holdout_test_split_stratified(
+        dataset, test_ratio=test_ratio, seed=seed, labels=labels
+    )
     print(f"Test set size: {len(test_idx)}")
 
     # Pre-load test tensors (CPU)
@@ -275,18 +368,29 @@ def main():
     all_los = torch.cat(lss, dim=0)
     print(f"  all_x: {tuple(all_x.shape)}, all_los range: [{all_los.min()}, {all_los.max()}]")
 
-    # Edge index
-    edge_index_path = _PROJECT_ROOT / "src" / "explainers" / "edge_index.pickle"
-    with open(edge_index_path, "rb") as f:
-        edge_index = pickle.load(f)
-    edge_index = edge_index.to(device)
-
     # Extract per-fold
     fold_dfs: list[pd.DataFrame] = []
     for fold_id in folds_to_run:
         fold_dir = str(run_dir / "folds" / f"fold_{fold_id}")
-        print(f"\n=== Fold {fold_id}: extracting GatedFusion weights ===")
+        fold_cfg = load_yaml(str(run_dir / "folds" / f"fold_{fold_id}" / "config.final.yaml"))
+        print(f"\n=== Fold {fold_id}: building edge_index ===")
 
+        # Reconstruct fold-specific train_df and build edge_index (mirrors run_kfold_cv.py)
+        train_df = _get_train_df_for_fold(dataset, labels, fold_cfg, fold_id)
+        edge_cfg = fold_cfg.get("edge", {})
+        built = build_edge(
+            model_name=model_name,
+            root=data_root,
+            seed=fold_cfg["train"]["seed"],
+            train_df=train_df,
+            num_nodes=num_nodes,
+            batch_size=fold_cfg["train"]["batch_size"],
+            **edge_cfg,
+        )
+        edge_index = (built[0] if isinstance(built, tuple) else built).to(device)
+        print(f"  edge_index shape: {tuple(edge_index.shape)}")
+
+        print(f"=== Fold {fold_id}: extracting GatedFusion weights ===")
         model, _ = _load_fold_model(fold_dir, device)
 
         df_fold = extract_weights_one_fold_with_edge(
@@ -300,6 +404,11 @@ def main():
         )
         print(f"  Collected {len(df_fold)} samples, LOS range [{df_fold['LOS'].min()}, {df_fold['LOS'].max()}]")
         print(f"  Mean weights — w_ad={df_fold['w_ad'].mean():.3f}, w_dis={df_fold['w_dis'].mean():.3f}, w_merged={df_fold['w_merged'].mean():.3f}")
+
+        # Sanity check: recompute test AUC/ACC and compare to stored metrics
+        _sanity_check(model, all_x, all_los, all_y, edge_index, device, batch_size,
+                      fold_id, run_dir)
+
         fold_dfs.append(df_fold)
 
     # Aggregate

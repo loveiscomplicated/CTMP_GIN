@@ -5,7 +5,7 @@
   최종 실행 순서
 
 # Step 1: k-fold CV 모델들에서 GatedFusion 가중치 추출
-python src/analysis/extract_gated_fusion_kfold.py --run_name "20260302-143833__ctmp_gin__bs=256__lr=2.00e-04__seed=1__cv=5__test=0.15" --device mps
+python src/analysis/extract_gated_fusion_kfold.py --run_name "20260302-121934__ctmp_gin__bs=256__lr=2.00e-04__seed=3__cv=5__test=0.15" --device mps
 # → src/analysis/gated_fusion_w_los_kfold.csv 생성
 
 # Step 2: LOS 그룹 결정 (k-fold CSV 자동 우선 사용)
@@ -13,7 +13,7 @@ python src/analysis/los_group_detection.py
 # → src/analysis/los_groups.json + 시각화 생성
 
 # Step 3: PI 실행
-python src/explainers/permutation_main.py --run_name "20260302-143833__ctmp_gin__bs=256__lr=2.00e-04__seed=1__cv=5__test=0.15" --fold all --device mps --num_repeats 5 --max_test_samples 30000
+python src/explainers/permutation_main.py --run_name "20260302-121934__ctmp_gin__bs=256__lr=2.00e-04__seed=3__cv=5__test=0.15" --fold all --device mps --num_repeats 5 --max_test_samples 30000
 
 """
 import json
@@ -114,8 +114,8 @@ def _parse_fold_arg(fold_str: str, n_folds: int) -> list[int]:
 
 
 def _load_fold_model(fold_dir: str, device: torch.device) -> tuple[nn.Module, dict]:
-    """Load model from best.pt. cfg is embedded in the checkpoint."""
-    ckpt_path = os.path.join(fold_dir, "checkpoints", "best.pt")
+    """Load model from last.pt (matches stored test metrics). cfg is embedded in the checkpoint."""
+    ckpt_path = os.path.join(fold_dir, "checkpoints", "last.pt")
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
@@ -286,10 +286,14 @@ def main():
     device = device_set(args.device)
 
     # ---- Dataset (shared across folds) ----
+    model_name = fold_0_cfg["model"]["name"]
+    remove_los = model_name not in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]
     dataset = TEDSTensorDataset(
         root=root,
         binary=fold_0_cfg["train"].get("binary", True),
         ig_label=fold_0_cfg["train"].get("ig_label", False),
+        remove_los=remove_los,
+        do_preprocess=fold_0_cfg["train"].get("do_preprocess", True),
     )
     col_names = dataset.col_info[0]
     V = len(col_names)
