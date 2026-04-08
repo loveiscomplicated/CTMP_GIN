@@ -29,7 +29,7 @@ def parse_args():
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--decision_threshold", type=float, default=None)
     p.add_argument("--binary", type=int, default=None)
-    p.add_argument("--cv", type=bool, default=True)
+    p.add_argument("--cv", type=lambda x: x.lower() not in ("false", "0", "no"), default=True)
     return p.parse_args()
 
 
@@ -58,7 +58,7 @@ def override_cfg(cfg: dict, args) -> dict:
     if args.decision_threshold is not None:
         cfg.setdefault("train", {})["decision_threshold"] = args.decision_threshold
     if args.cv is not None:
-        cfg.setdefault("cv", {})["cv"] = args.cv
+        cfg.setdefault("train", {})["cv"] = args.cv
     return cfg
 
 

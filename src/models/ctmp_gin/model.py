@@ -89,8 +89,8 @@ class CTMPGIN(nn.Module):
         self.dropout_p = dropout_p
 
         self.col_list, self.col_dims, self.ad_col_index, self.dis_col_index = col_info
-        self.ad_idx_t = torch.tensor(self.ad_col_index, dtype=torch.long)
-        self.dis_idx_t = torch.tensor(self.dis_col_index, dtype=torch.long)
+        self.register_buffer("ad_idx_t", torch.tensor(self.ad_col_index, dtype=torch.long))
+        self.register_buffer("dis_idx_t", torch.tensor(self.dis_col_index, dtype=torch.long))
 
         self.gin_hidden_channel = gin_hidden_channel
         self.gin_hidden_channel_2 = gin_hidden_channel_2
@@ -195,8 +195,7 @@ class CTMPGIN(nn.Module):
     def forward(self, x, los, edge_index, **kwargs):
         batch_size = x.shape[0]
         num_nodes = len(self.ad_idx_t)
-        self.ad_idx_t = self.ad_idx_t.to(self.device)
-        self.dis_idx_t = self.dis_idx_t.to(self.device)
+        # ad_idx_t / dis_idx_t are registered buffers — they move with the model automatically.
 
         # x_batch shape: [batch_size, num_var(=72)]
         x_embedded = self.entity_embedding_layer(x) # shape: [batch, num_var, feature_dim]
@@ -526,9 +525,8 @@ class CtmpGIN_return_emb(nn.Module):
         # process: [batch * 2, num_nodes, feature_dim]으로 변환하기
         # 위와 같이 되어야 함: 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, ...
         x_seperated = seperate_x(x=x_embedded, # [B*2, 60, 32]
-                                 ad_idx_t=self.ad_idx_t, 
-                                 dis_idx_t=self.dis_idx_t, 
-                                 device=self.device)
+                                 ad_idx_t=self.ad_idx_t,
+                                 dis_idx_t=self.dis_idx_t)
 
         # GIN_1에 입력
         x_flatten = x_seperated.reshape(batch_size * 2 * num_nodes, -1)

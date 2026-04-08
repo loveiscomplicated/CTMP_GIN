@@ -117,8 +117,8 @@ class GinGru(nn.Module):
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         self.col_list, self.col_dims, ad_col_index, dis_col_index = col_info
-        self.ad_idx_t = torch.tensor(ad_col_index)
-        self.dis_idx_t = torch.tensor(dis_col_index)
+        self.register_buffer("ad_idx_t", torch.tensor(ad_col_index, dtype=torch.long))
+        self.register_buffer("dis_idx_t", torch.tensor(dis_col_index, dtype=torch.long))
 
         # EntityEmbedding 레이어 정의
         self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, embedding_dim=embedding_dim)
@@ -171,9 +171,7 @@ class GinGru(nn.Module):
         '''
         template_edge_index: supersized edge_index
         '''
-        self.ad_idx_t = self.ad_idx_t.to(device)
-        self.dis_idx_t = self.dis_idx_t.to(device)
-        
+        # ad_idx_t / dis_idx_t are registered buffers — they move with the model automatically.
         batch_size = x_batch.shape[0]
         num_nodes = len(self.ad_idx_t)
 

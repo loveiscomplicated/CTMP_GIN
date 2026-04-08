@@ -185,7 +185,10 @@ class ExperimentLogger:
         # best
         if self.policy.save_best:
             if self.policy.monitor not in metrics:
-                # If monitor metric isn't present, do nothing (avoid crashing training)
+                # If monitor metric isn't present, skip saving (avoid crashing training)
+                # This is expected for test-metric log calls, but warns on likely misconfiguration.
+                if any(k.startswith("valid_") for k in metrics):
+                    print(f"Warning: monitor metric '{self.policy.monitor}' not in metrics, skipping best checkpoint.")
                 return
             try:
                 cur = float(metrics[self.policy.monitor])
@@ -228,17 +231,19 @@ class ExperimentLogger:
         if scheduler is not None and state.get("scheduler_state_dict") is not None:
             scheduler.load_state_dict(state["scheduler_state_dict"])
 
-        # best tracking(선택)
-        self.best_epoch = None
-        self.best_value = None
-        if os.path.basename(ckpt_name) == "best.pt":
-            m = state.get("metrics", {})
-            if self.policy.monitor in m:
-                try:
-                    self.best_value = float(m[self.policy.monitor])
-                except Exception:
-                    self.best_value = None
-            self.best_epoch = state.get("epoch", None)
+        # best tracking 복원: 체크포인트 종류와 관계없이 metrics에서 monitor 값을 읽어 복원한다.
+        # 이렇게 해야 last.pt / epoch_N.pt 로 재개해도 _is_better() 비교가 올바르게 동작한다.
+        m = state.get("metrics", {})
+        if self.policy.monitor in m:
+            try:
+                self.best_value = float(m[self.policy.monitor])
+                self.best_epoch = state.get("epoch", None)
+            except Exception:
+                self.best_value = None
+                self.best_epoch = None
+        else:
+            self.best_value = None
+            self.best_epoch = None
 
         return state
 

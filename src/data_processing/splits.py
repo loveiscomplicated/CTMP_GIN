@@ -142,8 +142,11 @@ def make_loaders(dataset,
     print(f"Valid Set Size: {len(val_dataset)}")
     print(f"Test Set Size: {len(test_dataset)}")
 
+    # val/test must use drop_last=True regardless of the parameter:
+    # edge_index is built with a fixed batch_size, so a short last-batch
+    # would cause an out-of-range node index error at inference time.
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size,
-                                  shuffle=True, num_workers=num_workers, drop_last=True)
+                                  shuffle=True, num_workers=num_workers, drop_last=drop_last)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size,
                                 shuffle=False, num_workers=num_workers, drop_last=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size,
