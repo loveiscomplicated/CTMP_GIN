@@ -199,8 +199,8 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                     cfg=cfg_s,
                     n_neighbors=cfg_s["edge"]["n_neighbors"]
                 )
-                # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=False)
-                out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=True, mi_cache_path=mi_cache_path)
+                # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, mi_cached=False)
+                out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, mi_cached=True, mi_cache_path=mi_cache_path)
                 if model_name == "xgboost":
                     score = float(out["roc_auc"])
                 else:

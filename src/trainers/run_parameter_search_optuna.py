@@ -206,7 +206,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
             
             try:
                 mi_edge_path = None
-                if cfg_s["edge"].get("edge_cached", False):
+                if cfg_s["edge"].get("mi_cached", False):
                     print("requesting mi...")
                     mi_edge_path = request_mi(
                         mode="single",
@@ -216,12 +216,12 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                         n_neighbors=cfg_s["edge"]["n_neighbors"],
                     )
                 cfg_s["edge"]["cache_path"] = mi_edge_path
-                # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, edge_cached=False)
-                out = run_single_experiment(cfg_s, 
-                                            root=root, 
-                                            trial=trial, 
-                                            report_metric=report_metric, 
-                                            mi_edge_path=mi_edge_path)
+                # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, mi_cached=False)
+                out = run_single_experiment(cfg_s,
+                                            root=root,
+                                            trial=trial,
+                                            report_metric=report_metric,
+                                            mi_cache_path=mi_edge_path)
                 
                 if model_name == "xgboost":
                     score = float(out["roc_auc"])
@@ -337,5 +337,6 @@ if __name__ == "__main__":
                 db=db # 파라미터 전달
             )
     finally:
-        print("\n--- Starting Automatic Backup ---")
-        backup_to_sql(model_name=model_name)
+        if not args.init_only:
+            print("\n--- Starting Automatic Backup ---")
+            backup_to_sql(model_name=model_name)

@@ -246,12 +246,12 @@ def reeval_run(
     criterion = nn.BCEWithLogitsLoss() if binary else nn.CrossEntropyLoss()
     decision_threshold = 0.5
 
-    # edge_cached=False 경고 — cv_mi_dict는 numpy 전역 랜덤 상태에 의존하므로
+    # mi_cached=False 경고 — cv_mi_dict는 numpy 전역 랜덤 상태에 의존하므로
     # 훈련 시와 다른 edge_index가 생성될 수 있음. sanity check로 검증.
-    edge_cached = fold_0_cfg.get("edge", {}).get("edge_cached", True)
-    if not edge_cached:
+    mi_cached = fold_0_cfg.get("edge", {}).get("mi_cached", True)
+    if not mi_cached:
         print(
-            "  [WARN] edge_cached=False: cv_mi_dict is non-deterministic. "
+            "  [WARN] mi_cached=False: cv_mi_dict is non-deterministic. "
             "Each fold will be sanity-checked against stored test_auc before reporting."
         )
 

@@ -7,7 +7,7 @@ edge:
   threshold: 0.01
   pruning_ratio: 0.7
   return_edge_attr: False # CAUTION: potential error when set to True
-  edge_cached: False
+  mi_cached: False
 
 model:
   name: ctmp_gin
