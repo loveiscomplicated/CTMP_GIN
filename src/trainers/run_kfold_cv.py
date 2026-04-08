@@ -148,6 +148,11 @@ def run_kfold_experiment(cfg, root):
         )
         edge_index = edge_index.to(device)  # type: ignore
 
+        # Save for later analysis scripts (extract, permutation, reeval)
+        edge_index_save_path = os.path.join(fold_dir, "edge_index.pt")
+        torch.save(edge_index.cpu(), edge_index_save_path)
+        print(f"  edge_index saved: {edge_index_save_path}")
+
         print(f"edge index: \n{edge_index}")
         print(f"edge index shape: \n{edge_index.shape}")
 

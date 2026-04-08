@@ -38,6 +38,7 @@ from src.data_processing.splits import (
 )
 from src.models.factory import build_model, build_edge
 from src.utils.device_set import device_set
+from src.utils.seed_set import set_seed
 
 from src.explainers.permutation_importance import (
     PermutationImportanceConfig,
@@ -173,9 +174,10 @@ def _build_fold_edge_index(
     fold_id: int,
     device: torch.device,
     data_root: str,
+    fold_dir: str | None = None,
 ) -> torch.Tensor:
     """
-    Reconstruct the exact edge_index used during training for fold_id.
+    Load saved edge_index.pt if available; otherwise reconstruct from training data.
 
     Mirrors run_kfold_cv.py:
         trainval_idx, test_idx = holdout_test_split_stratified(...)
@@ -183,6 +185,14 @@ def _build_fold_edge_index(
             train_df = dataset.processed_df.iloc[train_idx]
             edge_index = build_edge(model_name, root, seed, train_df, ...)
     """
+    # Load saved edge_index if available
+    if fold_dir is not None:
+        edge_index_path = os.path.join(fold_dir, "edge_index.pt")
+        if os.path.exists(edge_index_path):
+            print(f"  Loading saved edge_index from {edge_index_path}")
+            return torch.load(edge_index_path, map_location=device)
+        print(f"  edge_index.pt not found, recomputing...")
+
     seed = cfg["train"]["seed"]
     test_ratio = cfg["train"]["test_ratio"]
     n_folds = cfg["train"]["n_folds"]
@@ -213,6 +223,7 @@ def _build_fold_edge_index(
 
     train_df = dataset.processed_df.iloc[train_idx]
 
+    set_seed(seed)
     result = build_edge(
         model_name=model_name,
         root=data_root,
@@ -336,7 +347,7 @@ def main():
         batch_size = args.batch_size or fold_cfg["train"]["batch_size"]
         num_workers = fold_cfg["train"].get("num_workers", 0)
 
-        # Build fold-specific edge_index (MI-based, from this fold's train_df)
+        # Build fold-specific edge_index (load saved if available)
         print(f"  Building edge_index for fold {fold_id}...")
         edge_index = _build_fold_edge_index(
             dataset=dataset,
@@ -344,6 +355,7 @@ def main():
             fold_id=fold_id,
             device=device,
             data_root=root,
+            fold_dir=fold_dir,
         )
         print(
             f"  edge_index shape: {tuple(edge_index.shape)}, max node: {edge_index.max().item()}"

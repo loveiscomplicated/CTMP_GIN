@@ -44,6 +44,7 @@ from src.data_processing.tensor_dataset import TEDSTensorDataset
 from src.data_processing.splits import holdout_test_split_stratified, kfold_stratified
 from src.models.factory import build_model, build_edge
 from src.utils.device_set import device_set
+from src.utils.seed_set import set_seed
 
 
 def parse_args():
@@ -375,19 +376,26 @@ def main():
         fold_cfg = load_yaml(str(run_dir / "folds" / f"fold_{fold_id}" / "config.final.yaml"))
         print(f"\n=== Fold {fold_id}: building edge_index ===")
 
-        # Reconstruct fold-specific train_df and build edge_index (mirrors run_kfold_cv.py)
-        train_df = _get_train_df_for_fold(dataset, labels, fold_cfg, fold_id)
-        edge_cfg = fold_cfg.get("edge", {})
-        built = build_edge(
-            model_name=model_name,
-            root=data_root,
-            seed=fold_cfg["train"]["seed"],
-            train_df=train_df,
-            num_nodes=num_nodes,
-            batch_size=fold_cfg["train"]["batch_size"],
-            **edge_cfg,
-        )
-        edge_index = (built[0] if isinstance(built, tuple) else built).to(device)
+        # Load saved edge_index if available; otherwise recompute
+        edge_index_path = os.path.join(fold_dir, "edge_index.pt")
+        if os.path.exists(edge_index_path):
+            print(f"  Loading saved edge_index from {edge_index_path}")
+            edge_index = torch.load(edge_index_path, map_location=device)
+        else:
+            print(f"  edge_index.pt not found, recomputing...")
+            train_df = _get_train_df_for_fold(dataset, labels, fold_cfg, fold_id)
+            edge_cfg = fold_cfg.get("edge", {})
+            set_seed(fold_cfg["train"]["seed"])
+            built = build_edge(
+                model_name=model_name,
+                root=data_root,
+                seed=fold_cfg["train"]["seed"],
+                train_df=train_df,
+                num_nodes=num_nodes,
+                batch_size=fold_cfg["train"]["batch_size"],
+                **edge_cfg,
+            )
+            edge_index = (built[0] if isinstance(built, tuple) else built).to(device)
         print(f"  edge_index shape: {tuple(edge_index.shape)}")
 
         print(f"=== Fold {fold_id}: extracting GatedFusion weights ===")
