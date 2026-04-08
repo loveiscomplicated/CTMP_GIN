@@ -211,8 +211,8 @@ def mi_edge_index_batched(
         if return_edge_attr:
             attr_list.append(edge_attr_ad)
     
-    offset_ad = offset
-    
+    offset_ad = num_nodes * batch_size  # dis graphs start after all ad graphs
+
     for g in range(batch_size):
         offset = num_nodes * g + offset_ad
         edge_i = single_dis + offset
