@@ -95,8 +95,8 @@ class CheckpointPolicy:
     save_ckpt: bool = True
     save_every: int = 1          # save every N epochs (0 or <0 disables periodic saving)
     save_best: bool = True       # save best checkpoint
-    monitor: str = "valid_loss"  # metric name to monitor
-    mode: str = "min"            # "min" for loss, "max" for auc/f1
+    monitor: str = "valid_auc"   # metric name to monitor
+    mode: str = "max"            # "min" for loss, "max" for auc/f1
     keep_last: bool = True       # keep "last.pt"
 
 
@@ -118,8 +118,8 @@ class ExperimentLogger:
             save_ckpt=bool(train_cfg.get("save_ckpt", True)),
             save_every=int(train_cfg.get("save_every", 1)),
             save_best=bool(train_cfg.get("save_best", True)),
-            monitor=str(train_cfg.get("monitor", "valid_loss")),
-            mode=str(train_cfg.get("mode", "min")).lower(),
+            monitor=str(train_cfg.get("monitor", "valid_auc")),
+            mode=str(train_cfg.get("mode", "max")).lower(),
             keep_last=bool(train_cfg.get("keep_last", True)),
         )
 

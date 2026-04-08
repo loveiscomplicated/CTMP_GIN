@@ -281,6 +281,16 @@ def run_train_loop(
 
     print("\n--- Training Finished ---")
 
+    # Reload best checkpoint before test evaluation so that
+    # stored test metrics correspond to the best.pt model state.
+    if logger is not None and logger.best_epoch is not None:
+        best_ckpt_path = os.path.join(logger.ckpt_dir, "best.pt")
+        if os.path.exists(best_ckpt_path):
+            ckpt = torch.load(best_ckpt_path, map_location=device)
+            model.load_state_dict(ckpt["model_state_dict"])
+            model.eval()
+            print(f"  Reloaded best.pt (epoch={logger.best_epoch}) for test evaluation")
+
     with torch.no_grad():
         test_loss, test_accuracy, test_precision, test_recall, test_f1, test_auc = evaluate(
             model, test_dataloader, criterion, decision_threshold, device, binary, edge_index
