@@ -243,30 +243,41 @@ class CTMPGIN(nn.Module):
         logit = self.classifier_b(fused)
         return logit
 
-    def get_new_edge(self, edge_index, los, batch_size):
-        device = edge_index.device
+    def precompute_edge_index_2(self, edge_index: torch.Tensor, batch_size: int) -> None:
+        """
+        Precompute and cache edge_index_2 (internal + cross-graph edges).
+        Call once per trial after edge_index is finalized, before the training loop.
+        edge_index_2 is fixed per trial since edge_index and batch_size are both fixed.
+        """
         num_nodes = len(self.ad_col_index)
-        new_edge_index = self.get_edge_index_2(edge_index=edge_index, num_nodes=num_nodes, batch_size=batch_size)
-        new_edge_attr = self.get_edge_attr(los=los, edge_index=edge_index, batch_size=batch_size, num_nodes=num_nodes)
-        new_edge_index = new_edge_index.to(device)
-        new_edge_attr = new_edge_attr.to(device)
-        return new_edge_index, new_edge_attr
-        
-    def get_edge_index_2(self, edge_index, num_nodes, batch_size):
-        '''
-        Args:
-            edge_index: ad, dis 이어져 있는 edge_index, gin_1에서 사용했던 것
-        '''
         merged_num_nodes = num_nodes * batch_size
-        start_node = torch.arange(0, merged_num_nodes) # [batch_size * num_nodes] == [merged_num_nodes]
-        end_node = start_node + merged_num_nodes       # [batch_size * num_nodes] == [merged_num_nodes]
-        
-        start_node = start_node.unsqueeze(dim=0)       # [1, merged_num_nodes]
-        end_node = end_node.unsqueeze(dim=0)           # [1, merged_num_nodes]
-        new_edge_index = torch.cat((start_node, end_node), dim = 0) # [2, merged_num_nodes]
-        new_edge_index = new_edge_index.to(edge_index.device)
-        return torch.cat((edge_index, new_edge_index), dim=1) # # [2, 원래 edge_index + merged_num_nodes]
-    
+        start_node = torch.arange(0, merged_num_nodes, device=edge_index.device)
+        end_node = start_node + merged_num_nodes
+        cross_edge_index = torch.stack([start_node, end_node], dim=0)  # [2, B*N]
+        edge_index_2 = torch.cat([edge_index, cross_edge_index], dim=1)
+        self.register_buffer("_cached_edge_index_2", edge_index_2)
+
+    def get_new_edge(self, edge_index, los, batch_size):
+        num_nodes = len(self.ad_col_index)
+
+        if hasattr(self, "_cached_edge_index_2") and self._cached_edge_index_2 is not None:
+            edge_index_2 = self._cached_edge_index_2
+        else:
+            edge_index_2 = self._build_edge_index_2(edge_index, num_nodes, batch_size)
+
+        new_edge_attr = self.get_edge_attr(los=los, edge_index=edge_index, batch_size=batch_size, num_nodes=num_nodes)
+        return edge_index_2, new_edge_attr
+
+    def _build_edge_index_2(self, edge_index, num_nodes, batch_size):
+        merged_num_nodes = num_nodes * batch_size
+        start_node = torch.arange(0, merged_num_nodes, device=edge_index.device)
+        end_node = start_node + merged_num_nodes
+        cross_edge_index = torch.stack([start_node, end_node], dim=0)
+        return torch.cat([edge_index, cross_edge_index], dim=1)
+
+    def get_edge_index_2(self, edge_index, num_nodes, batch_size):
+        return self._build_edge_index_2(edge_index, num_nodes, batch_size)
+
     def get_edge_attr(self, los, edge_index, batch_size, num_nodes):
         """
         edge_index: internal edges (E_internal)
@@ -275,18 +286,18 @@ class CTMPGIN(nn.Module):
         """
         device = edge_index.device
         E_internal = edge_index.size(1)
-        E_cross = batch_size * num_nodes  # new_edge_index.size(1)와 동일해야 함
 
         # 1) internal edges -> NONE token (0)
-        none_idx = torch.zeros(E_internal, dtype=torch.long, device=device)   # (E_internal,)
-        edge_attr_internal = self.embed_los(none_idx)                         # (E_internal, D)
+        # Directly use weight[0] instead of creating E_internal zeros + embedding lookup
+        none_emb = self.embed_los.embedding_layer.weight[0]               # (D,)
+        edge_attr_internal = none_emb.unsqueeze(0).expand(E_internal, -1) # (E_internal, D), no-copy
 
         # 2) cross edges -> LOS token (1..max_los), sample별로 num_nodes번 반복
         los = los.view(batch_size).to(device).long()                          # (B,)
         los_idx = los.repeat_interleave(num_nodes)                            # (B*N,) = (E_cross,)
         edge_attr_cross = self.embed_los(los_idx)                             # (E_cross, D)
 
-        return torch.cat([edge_attr_internal, edge_attr_cross], dim=0)        # (E_total, D)
+        return torch.cat([edge_attr_internal.contiguous(), edge_attr_cross], dim=0)  # (E_total, D)
 
 
     def forward_from_x_emb(self, x_embedded, los, edge_index, **kwargs):

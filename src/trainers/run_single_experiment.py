@@ -97,6 +97,13 @@ def run_single_experiment(cfg,
                             **cfg.get("edge", {})
                             )
     edge_index = edge_index.to(device) # type: ignore
+
+    # Precompute edge_index_2 (internal + cross-graph edges) once per trial.
+    # Both edge_index and batch_size are fixed for the whole trial, so this
+    # avoids recreating CPU tensors and H2D transfers on every forward pass.
+    if hasattr(model, "precompute_edge_index_2"):
+        model.precompute_edge_index_2(edge_index, cfg["train"]["batch_size"])
+
     if trial is None:
         print(model)
         print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")

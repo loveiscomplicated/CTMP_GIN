@@ -40,7 +40,7 @@ def suggest_ctmp_gin_params(trial, cfg):
     cfg["edge"]["threshold"] = trial.suggest_categorical("threshold", [0.0, 0.005, 0.01, 0.02])
     cfg["edge"]["pruning_ratio"] = trial.suggest_categorical("pruning_ratio", [0.0, 0.3, 0.5, 0.7])
 
-    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512])
+    cfg["train"]["batch_size"] = trial.suggest_categorical("batch_size", [128, 256, 512, 1024])
     cfg["train"]["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 3e-3, log=True)
     cfg["train"]["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 5e-4, log=True)
     cfg["train"]["optimizer"] = trial.suggest_categorical("optimizer", ["adam", "adamw"])
@@ -188,8 +188,6 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
 
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(trial_seed)
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
 
         cfg = copy.deepcopy(base_cfg)
         model_name = cfg["model"]["name"]
@@ -205,6 +203,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
             cfg_s["train"]["seed"] = int(seed)
             
             try:
+                """
                 mi_edge_path = None
                 if cfg_s["edge"].get("mi_cached", False):
                     print("requesting mi...")
@@ -216,6 +215,8 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                         n_neighbors=cfg_s["edge"]["n_neighbors"],
                     )
                 cfg_s["edge"]["cache_path"] = mi_edge_path
+                """
+                cfg_s["edge"]["cache_path"] = None  # search_mi_dict will auto-compute/cache by seed
                 # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, mi_cached=False)
                 out = run_single_experiment(cfg_s,
                                             root=root,

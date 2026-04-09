@@ -16,10 +16,10 @@ sys.path.insert(0, str(project_root.parent))
 def train(model, dataloader, criterion, optimizer, edge_index, binary, device):
     model.train()
     running_loss = 0.0
-    for x_batch, y_batch, los_batch in tqdm(dataloader, desc="train_process", leave=True):
-        x_batch = x_batch.to(device)
-        y_batch = y_batch.to(device)
-        los_batch = los_batch.to(device)
+    for x_batch, y_batch, los_batch in tqdm(dataloader, desc="train_process", leave=False):
+        x_batch = x_batch.to(device, non_blocking=True)
+        y_batch = y_batch.to(device, non_blocking=True)
+        los_batch = los_batch.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
@@ -64,10 +64,10 @@ def evaluate(
     all_scores = []  # binary: (N,), multiclass: (N, K)
 
     with torch.no_grad():
-        for x_batch, y_batch, los_batch in tqdm(val_dataloader, desc="eval_process", leave=True):
-            x_batch = x_batch.to(device)
-            y_batch = y_batch.to(device)
-            los_batch = los_batch.to(device)
+        for x_batch, y_batch, los_batch in tqdm(val_dataloader, desc="eval_process", leave=False):
+            x_batch = x_batch.to(device, non_blocking=True)
+            y_batch = y_batch.to(device, non_blocking=True)
+            los_batch = los_batch.to(device, non_blocking=True)
 
             logits = model(x_batch, 
                            los_batch, 

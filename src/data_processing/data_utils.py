@@ -176,12 +176,16 @@ def train_test_split_stratified(dataset, batch_size,
 
     # DataLoader 생성
     # drop_last=True를 해야 마지막 자투리 배치를 위해 따로 배치 엣지 인덱스를 만들 필요가 없음
+    _persistent = num_workers > 0
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size,
-                                  shuffle=True, num_workers=num_workers, drop_last=True, pin_memory=True)
+                                  shuffle=True, num_workers=num_workers, drop_last=True,
+                                  pin_memory=True, persistent_workers=_persistent)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size,
-                                shuffle=False, num_workers=num_workers, drop_last=True, pin_memory=True)
+                                shuffle=False, num_workers=num_workers, drop_last=True,
+                                pin_memory=True, persistent_workers=_persistent)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size,
-                                 shuffle=False, num_workers=num_workers, drop_last=True, pin_memory=True)
+                                 shuffle=False, num_workers=num_workers, drop_last=True,
+                                 pin_memory=True, persistent_workers=_persistent)
 
     return train_dataloader, val_dataloader, test_dataloader, (train_idx, val_idx, test_idx)
 
