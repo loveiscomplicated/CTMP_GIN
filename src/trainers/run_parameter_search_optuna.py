@@ -222,7 +222,7 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                                             root=root,
                                             trial=trial,
                                             report_metric=report_metric,
-                                            mi_cache_path=mi_edge_path)
+                                            mi_cache_path=None)
                 
                 if model_name == "xgboost":
                     score = float(out["roc_auc"])
@@ -286,6 +286,8 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
         objective_seeds=(1,),
     )
 
+    gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
+    print(f"[Worker GPU={gpu_id}] study={study.study_name}  model={model_name}  n_trials={n_trials}")
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True)
 
     # 결과 CSV 저장
