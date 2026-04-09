@@ -132,16 +132,27 @@ conda activate "$ENV_NAME"
 # 1. pip 업그레이드
 python -m pip install -U pip
 
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-# pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-# pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# CUDA 버전 자동 감지
+CUDA_RAW=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]*\)\.\([0-9]*\).*/\1\2/' || echo "")
+if [[ -z "$CUDA_RAW" ]]; then
+  CUDA_RAW=$(nvidia-smi 2>/dev/null | grep "CUDA Version" | sed 's/.*CUDA Version: \([0-9]*\)\.\([0-9]*\).*/\1\2/' || echo "")
+fi
+
+case "$CUDA_RAW" in
+  128|129) CUDA_TAG="cu128" ;;
+  126|127) CUDA_TAG="cu126" ;;
+  *)       CUDA_TAG="cu124" ;;
+esac
+
+echo "[$(ts)] Detected CUDA tag: $CUDA_TAG (raw: ${CUDA_RAW:-unknown})"
+pip3 install torch torchvision --index-url "https://download.pytorch.org/whl/${CUDA_TAG}"
 
 
 # 4. PyG 본체 및 sparse kernel 패키지 설치
 pip install torch-geometric
 TORCH_VER=$(python -c "import torch; print(torch.__version__.split('+')[0])")
 pip install torch-scatter torch-sparse torch-cluster \
-  -f "https://data.pyg.org/whl/torch-${TORCH_VER}+cu124.html"
+  -f "https://data.pyg.org/whl/torch-${TORCH_VER}+${CUDA_TAG}.html"
 
 cd "$REPO_DIR"
 pip install -r requirements.txt
