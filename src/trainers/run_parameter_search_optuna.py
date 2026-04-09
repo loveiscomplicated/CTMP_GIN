@@ -203,26 +203,20 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
             cfg_s["train"]["seed"] = int(seed)
             
             try:
-                """
-                mi_edge_path = None
-                if cfg_s["edge"].get("mi_cached", False):
-                    print("requesting mi...")
-                    mi_edge_path = request_mi(
-                        mode="single",
-                        fold=None,
-                        seed=seed,
-                        cfg=cfg_s,
-                        n_neighbors=cfg_s["edge"]["n_neighbors"],
-                    )
-                cfg_s["edge"]["cache_path"] = mi_edge_path
-                """
-                cfg_s["edge"]["cache_path"] = None  # search_mi_dict will auto-compute/cache by seed
-                # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, mi_cached=False)
+                print(f"[Trial {trial.number}] requesting MI (seed={seed}, n_neighbors={cfg_s['edge']['n_neighbors']})...")
+                mi_edge_path = request_mi(
+                    mode="single",
+                    fold=None,
+                    seed=seed,
+                    cfg=cfg_s,
+                    n_neighbors=cfg_s["edge"]["n_neighbors"],
+                    verbose_poll=True,
+                )
                 out = run_single_experiment(cfg_s,
                                             root=root,
                                             trial=trial,
                                             report_metric=report_metric,
-                                            mi_cache_path=None)
+                                            mi_cache_path=mi_edge_path)
                 
                 if model_name == "xgboost":
                     score = float(out["roc_auc"])
