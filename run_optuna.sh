@@ -208,6 +208,20 @@ mkdir -p "$LOG_DIR"
 pids=()
 rc=0
 
+# -----------------------
+# Restore PostgreSQL from previous run (if exists)
+# -----------------------
+PG_DUMP_FILE="/workspace/pgbackup/optuna_db.sql"
+if [[ -f "$PG_DUMP_FILE" ]]; then
+  echo "[$(ts)] Found PostgreSQL backup at $PG_DUMP_FILE. Restoring..."
+  PGPASSWORD="optuna_pw" psql -h 127.0.0.1 -p 5432 -U optuna -d optuna_db \
+    -f "$PG_DUMP_FILE" \
+    && echo "[$(ts)] PostgreSQL restore complete." \
+    || echo "[$(ts)] Warning: restore had errors (continuing)."
+else
+  echo "[$(ts)] No PostgreSQL backup found. Starting fresh."
+fi
+
 echo "[$(ts)] initializing optuna study schema..."
 python -m src.trainers.run_parameter_search_optuna \
     --config "$CONFIG_PATH" \
