@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import time
 import hashlib
 import subprocess
@@ -15,30 +16,55 @@ LOCAL_CACHE_DIR = Path("/workspace/CTMP_GIN/cache/mi_dict")
 # LOCAL_CACHE_DIR = Path(".") # for debugging
 LOCAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Rate-limit constants
+_RATE_LIMIT_MARKERS = ("rateLimitExceeded", "RATE_LIMIT_EXCEEDED", "403", "429")
+_RCLONE_MAX_RETRIES = 8
+_RCLONE_BACKOFF_BASE = 5.0   # seconds
+_RCLONE_BACKOFF_CAP  = 120.0 # seconds
 
-def _run(cmd: list[str]) -> str:
+# Ensure remote dirs are created only once per worker process
+_remote_dirs_ensured = False
+
+
+def _is_rate_limit_error(err: subprocess.CalledProcessError) -> bool:
+    combined = (err.stdout or "") + (err.stderr or "")
+    return any(marker in combined for marker in _RATE_LIMIT_MARKERS)
+
+
+def _run(cmd: list[str], *, allow_rate_limit_retry: bool = True) -> str:
     """
     Run command and return stdout.
-    Raise RuntimeError with stdout/stderr on failure.
+    Retries on Google Drive rate-limit errors with exponential backoff + jitter.
+    Raises RuntimeError with stdout/stderr on non-retryable failure.
     """
-    try:
-        p = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        return p.stdout
-    except FileNotFoundError as e:
-        raise RuntimeError(
-            f"[CMD NOT FOUND]\n"
-            f"cmd: {' '.join(cmd)}\n"
-            f"Is '{cmd[0]}' installed and in PATH?\n"
-            f"error: {e}\n"
-        ) from e
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(
-            f"[CMD FAILED]\n"
-            f"cmd: {' '.join(cmd)}\n"
-            f"returncode: {e.returncode}\n"
-            f"stdout:\n{e.stdout}\n"
-            f"stderr:\n{e.stderr}\n"
-        ) from e
+    for attempt in range(1, _RCLONE_MAX_RETRIES + 1):
+        try:
+            p = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return p.stdout
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                f"[CMD NOT FOUND]\n"
+                f"cmd: {' '.join(cmd)}\n"
+                f"Is '{cmd[0]}' installed and in PATH?\n"
+                f"error: {e}\n"
+            ) from e
+        except subprocess.CalledProcessError as e:
+            if allow_rate_limit_retry and _is_rate_limit_error(e) and attempt < _RCLONE_MAX_RETRIES:
+                wait = min(_RCLONE_BACKOFF_BASE * (2 ** (attempt - 1)), _RCLONE_BACKOFF_CAP)
+                wait += random.uniform(0, wait * 0.3)  # ±30% jitter
+                print(
+                    f"[request_mi] rate limit on attempt {attempt}/{_RCLONE_MAX_RETRIES}, "
+                    f"retrying in {wait:.1f}s  cmd={' '.join(cmd)}"
+                )
+                time.sleep(wait)
+                continue
+            raise RuntimeError(
+                f"[CMD FAILED]\n"
+                f"cmd: {' '.join(cmd)}\n"
+                f"returncode: {e.returncode}\n"
+                f"stdout:\n{e.stdout}\n"
+                f"stderr:\n{e.stderr}\n"
+            ) from e
 
 
 def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int, remove_los: bool=True) -> str:
@@ -59,9 +85,13 @@ def _request_id_from_artifact(artifact_key: str) -> str:
 
 
 def _ensure_remote_dirs() -> None:
-    # idempotent
+    """Create remote dirs once per worker process; no-op on subsequent calls."""
+    global _remote_dirs_ensured
+    if _remote_dirs_ensured:
+        return
     _run(["rclone", "mkdir", f"{REMOTE_BASE}/requests"])
     _run(["rclone", "mkdir", f"{REMOTE_BASE}/responses"])
+    _remote_dirs_ensured = True
 
 
 def _acquire_lock(lock_dir: Path, local_pkl: Path, use_cache: bool = True) -> bool:

@@ -8,6 +8,7 @@ import numpy as np
 import argparse
 from src.trainers.run_single_experiment import run_single_experiment
 from src.utils.backup_postgresql import backup_to_sql
+from src.utils.send_message import send_discord_message
 from scripts.request_mi import request_mi
 from typing import Optional
 
@@ -179,7 +180,7 @@ def load_cfg(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds=(1,)):
+def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds=(1,), bot_name="optuna_worker"):
     def objective(trial: optuna.Trial):
         trial_seed = 10000 + trial.number
         random.seed(trial_seed)
@@ -232,6 +233,14 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
                 raise
             except Exception as e:
                 print(f"[Trial {trial.number}] failed:", repr(e))
+                try:
+                    gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
+                    send_discord_message(
+                        f"[TRIAL FAIL] trial={trial.number} gpu={gpu_id} seed={seed}\n{repr(e)}",
+                        bot_name=bot_name,
+                    )
+                except Exception:
+                    pass
                 raise optuna.TrialPruned()
 
         return float(sum(scores) / len(scores))
@@ -273,20 +282,23 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
         load_if_exists=True,
     )
 
+    gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     objective = objective_factory(
         base_cfg=base_cfg,
         root=root,
         report_metric="valid_auc",
         objective_seeds=(1,),
+        bot_name=f"optuna_{study_name}_gpu{gpu_id}",
     )
 
-    gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
     print(f"[Worker GPU={gpu_id}] study={study.study_name}  model={model_name}  n_trials={n_trials}")
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True)
 
     # 결과 CSV 저장
     safe = study.study_name.replace("/", "_")
-    study.trials_dataframe().to_csv(f"runs/{safe}_optuna_trials.csv", index=False)
+    csv_dir = f"runs/optuna_logs/{safe}"
+    os.makedirs(csv_dir, exist_ok=True)
+    study.trials_dataframe().to_csv(f"{csv_dir}/{safe}_optuna_trials.csv", index=False)
 
     completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     if not completed:
