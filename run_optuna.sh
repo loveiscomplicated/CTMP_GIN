@@ -284,6 +284,26 @@ else
 fi
 
 # -----------------------
+# Export study to SQLite (for easy local inspection)
+# -----------------------
+SQLITE_PATH="${LOG_DIR}/${STUDY_NAME}.db"
+echo "[$(ts)] Exporting study to SQLite -> $SQLITE_PATH"
+python - <<PYEOF
+import optuna
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+try:
+    optuna.copy_study(
+        from_study_name="${STUDY_NAME}",
+        from_storage="postgresql+psycopg2://optuna:optuna_pw@127.0.0.1:5432/optuna_db",
+        to_study_name="${STUDY_NAME}",
+        to_storage="sqlite:///${SQLITE_PATH}",
+    )
+    print("[sqlite_export] done -> ${SQLITE_PATH}")
+except Exception as e:
+    print(f"[sqlite_export] failed: {e}")
+PYEOF
+
+# -----------------------
 # Upload runs (always try) + retry policy C
 #   - upload fails => notify + HOLD (no shutdown)
 # -----------------------
