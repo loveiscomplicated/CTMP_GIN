@@ -228,6 +228,22 @@ python -m src.trainers.run_parameter_search_optuna \
     --study-name "$STUDY_NAME" \
     --init-only
 
+# -----------------------
+# Periodic PostgreSQL backup (every 10 min, non-blocking)
+# -----------------------
+mkdir -p /workspace/pgbackup
+( while true; do
+    sleep 600
+    PGPASSWORD="optuna_pw" pg_dump -h 127.0.0.1 -p 5432 -U optuna optuna_db \
+      > /workspace/pgbackup/optuna_db.sql.tmp 2>/dev/null \
+      && mv /workspace/pgbackup/optuna_db.sql.tmp /workspace/pgbackup/optuna_db.sql \
+      && echo "[$(ts)] [pg_backup] periodic backup done" \
+      || echo "[$(ts)] [pg_backup] periodic backup failed"
+  done
+) &
+PG_BACKUP_PID=$!
+echo "[$(ts)] periodic PG backup started (pid=$PG_BACKUP_PID, every 10m) -> /workspace/pgbackup/optuna_db.sql"
+
 for i in "${!GPU_IDS[@]}"; do
   gpu="${GPU_IDS[$i]}"
   echo "[$(ts)] start worker $i on GPU $gpu"
@@ -246,6 +262,19 @@ for pid in "${pids[@]}"; do
     rc=1
   fi
 done
+
+# Stop periodic backup loop
+kill "$PG_BACKUP_PID" 2>/dev/null || true
+wait "$PG_BACKUP_PID" 2>/dev/null || true
+
+# Final PostgreSQL backup
+echo "[$(ts)] Running final PostgreSQL backup..."
+mkdir -p /workspace/pgbackup
+PGPASSWORD="optuna_pw" pg_dump -h 127.0.0.1 -p 5432 -U optuna optuna_db \
+  > /workspace/pgbackup/optuna_db.sql.tmp \
+  && mv /workspace/pgbackup/optuna_db.sql.tmp /workspace/pgbackup/optuna_db.sql \
+  && echo "[$(ts)] Final PostgreSQL backup done -> /workspace/pgbackup/optuna_db.sql" \
+  || echo "[$(ts)] Warning: final PostgreSQL backup failed."
 
 TRAIN_RC="$rc"
 if [[ "$TRAIN_RC" -eq 0 ]]; then
