@@ -265,9 +265,7 @@ def suggest_gin_gru_2_points_params(trial, cfg):
     cfg["train"]["optimizer"] = trial.suggest_categorical(
         "optimizer", ["adam", "adamw"]
     )
-    cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical(
-        "lr_scheduler_patience", [2, 5, 8]
-    )
+    # cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical("lr_scheduler_patience", [2, 5, 8])
     # cfg["train"]["early_stopping_patience"] = trial.suggest_categorical("early_stopping_patience", [8, 12, 16])
 
 
