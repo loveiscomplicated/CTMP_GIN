@@ -108,7 +108,7 @@ class TEDSTensorDataset(Dataset):
         Returns:
             tuple: A tuple (df_tensor, col_info, LOS) containing the preprocessed data.
         """
-        if not self.do_preprocess:
+        if self.do_preprocess:
             # missing value
             df = tackle_missing_value_wrapper(
                 self.raw_data_path, self.missing_corrected_path

@@ -42,6 +42,7 @@ def run_single_experiment(cfg,
         binary=cfg["train"].get("binary", True),
         ig_label=cfg["train"].get("ig_label", False),
         remove_los=remove_los,
+        do_preprocess=cfg["train"].get("do_preprocess", True),
     )
 
     cfg["model"]["params"]["col_info"] = dataset.col_info
