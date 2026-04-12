@@ -150,6 +150,13 @@ class TEDSTensorDataset(Dataset):
         # To use torch.Embedding, organizing label as successive integers is needed.
         df = organize_labels(df, self.ig_label)
 
+        # When LOS is kept in the DataFrame (remove_los=False), models like GIN/A3TGCN/GinGru
+        # always torch.cat LOS at the END of x in forward(). Move LOS to the last column
+        # here so that col_info offsets align with what the model receives.
+        if not self.remove_los and "LOS" in df.columns:
+            los_col = df.pop("LOS")
+            df["LOS"] = los_col
+
         label_col = "REASONb" if self.binary else "REASON"
         y_tensor = df_to_tensor(df[label_col]).unsqueeze(1)  # 라벨 추출
 
