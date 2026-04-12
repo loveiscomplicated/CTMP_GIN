@@ -148,6 +148,10 @@ def run_kfold_experiment(cfg, root):
         )
         edge_index = edge_index.to(device)  # type: ignore
 
+        # Cache batch-level edge_index_2 once per fold (CTMPGIN optimisation)
+        if hasattr(model, "precompute_edge_index_2"):
+            model.precompute_edge_index_2(edge_index, cfg["train"]["batch_size"])
+
         # Save for later analysis scripts (extract, permutation, reeval)
         edge_index_save_path = os.path.join(fold_dir, "edge_index.pt")
         torch.save(edge_index.cpu(), edge_index_save_path)
