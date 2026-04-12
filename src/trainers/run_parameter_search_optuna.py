@@ -396,7 +396,7 @@ def run_optuna(
     config_path: str,
     root: str,
     n_trials: int = 50,
-    epochs: int = 20,
+    epochs: int = 50,
     study_name: Optional[str] = None,
     db="postgresql",
 ):
@@ -501,7 +501,7 @@ if __name__ == "__main__":
                 config_path=config_path,
                 root=root,
                 n_trials=args.n_trials or 50,
-                epochs=args.epochs or 20,
+                epochs=args.epochs or 50,
                 study_name=args.study_name,
                 db=db,  # 파라미터 전달
             )

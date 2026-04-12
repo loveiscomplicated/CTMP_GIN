@@ -59,7 +59,7 @@ fi
 SEND_MESSAGE_PY="${REPO_DIR}/src/utils/send_message.py"
 BOT_NAME="runpod_optuna_${MODEL_NAME}"
 
-EPOCHS="${EPOCHS:-20}"
+EPOCHS="${EPOCHS:-50}"
 TOTAL_TRIALS="${TOTAL_TRIALS:-50}"
 
 
