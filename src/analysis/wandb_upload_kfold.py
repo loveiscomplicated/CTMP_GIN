@@ -46,12 +46,12 @@ def upload_jsonl_to_wandb(
 if __name__ == "__main__":
     cur_dir = os.path.dirname(__file__)
     runs_protected_path = os.path.join(cur_dir, "..", "..", "runs", "protected")
-    model_name = "decoupled_ctmp_gin"
+    model_name = "final_ctmp_gin"
     seed = 2
     common_path = os.path.join(
         runs_protected_path,
         "k_fold_CV",
-        "20260407-172018__ctmp_gin__bs=512__lr=5.36e-04__seed=2__cv=5__test=0.15",
+        "(final)20260411-061107__ctmp_gin__bs=512__lr=2.23e-04__seed=2__cv=5__test=0.15",
         "folds",
     )
     # 자동화 예시
