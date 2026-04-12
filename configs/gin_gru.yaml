@@ -1,3 +1,4 @@
+# python -m src.trainers.run_parameter_search_optuna_local --config configs/gin_gru_2_points.yaml --n-trials 50 --epochs 50
 device: cpu # if null, it automatically sets the available device. (cuda | mps | cpu)
             # it is often better to use cpu due to recurrent unit.
 edge:
