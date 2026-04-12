@@ -55,6 +55,13 @@ ctmp_gin_auc_2 <- c(
   0.95381, 0.95485, 0.95391, 0.95374, 0.95246  # Seed 1 (Fold 4~0)
 )
 
+
+ctmp_gin_auc_3 <- c(
+  0.95495, 0.95453, 0.95522, 0.95414, 0.95417, # Seed 3 (Fold 4~0)
+  0.95211, 0.95252, 0.95298, 0.95319, 0.95310, # Seed 2 (Fold 4~0)
+  0.95317, 0.95349, 0.95236, 0.95385, 0.95318  # Seed 1 (Fold 4~0)
+)
+
 # 2. 반복(k, r) 인덱스 생성
 # k (Fold 번호): 1~5가 3번 반복됨 (1 2 3 4 5 1 2 3 4 5 1 2 3 4 5)
 k_seq <- rep(1:5, times = 3)
@@ -150,6 +157,54 @@ df_fully_2 <- data.frame(
   r = rep(r_seq, times = 2)
 )
 
+# CTMP_GIN vs CTMP_GIN_3 데이터
+df_ctmp_gin_3 <- data.frame(
+  model = rep(c("CTMP_GIN", "CTMP_GIN_3"), each = 15),
+  values = c(ctmp_gin_auc, ctmp_gin_auc_3),
+  k = rep(k_seq, times = 2),
+  r = rep(r_seq, times = 2)
+)
+
+# CTMP_GIN_3 vs GIN 데이터
+df_gin_3 <- data.frame(
+  model = rep(c("CTMP_GIN_3", "GIN"), each = 15),
+  values = c(ctmp_gin_auc_3, gin_auc),
+  k = rep(k_seq, times = 2),
+  r = rep(r_seq, times = 2)
+)
+
+# CTMP_GIN_3 vs A3TGCN 데이터
+df_a3tgcn_3 <- data.frame(
+  model = rep(c("CTMP_GIN_3", "A3TGCN"), each = 15),
+  values = c(ctmp_gin_auc_3, a3tgcn_auc),
+  k = rep(k_seq, times = 2),
+  r = rep(r_seq, times = 2)
+)
+
+# CTMP_GIN_3 vs Ablation - no_gate
+df_no_gate_3 <- data.frame(
+  model = rep(c("CTMP_GIN_3", "no_gate"), each = 15),
+  values = c(ctmp_gin_auc_3, no_gate_auc),
+  k = rep(k_seq, times = 2),
+  r = rep(r_seq, times = 2)
+)
+
+# CTMP_GIN_3 vs Ablation - no_preprocessing
+df_no_preprocess_3 <- data.frame(
+  model = rep(c("CTMP_GIN_3", "no_preprocessing"), each = 15),
+  values = c(ctmp_gin_auc_3, no_process_auc),
+  k = rep(k_seq, times = 2),
+  r = rep(r_seq, times = 2)
+)
+
+# CTMP_GIN_3 vs Ablation - fully_connected_edge
+df_fully_3 <- data.frame(
+  model = rep(c("CTMP_GIN_3", "fully_connected_edge"), each = 15),
+  values = c(ctmp_gin_auc_3, fully_auc),
+  k = rep(k_seq, times = 2),
+  r = rep(r_seq, times = 2)
+)
+
 # 4. 통계 검정 파라미터 설정 (TEDS 데이터셋 기준)
 n1 <- 948014  # Train 세트 사이즈
 n2 <- 209121  # Test 세트 사이즈
@@ -211,3 +266,40 @@ res_fully_2 <- repkfold_ttest(
   data = df_fully_2, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
 )
 print(res_fully_2)
+
+# 7. CTMP_GIN_3 기반 Repeated K-Fold Corrected T-Test 실행
+cat("\n=== CTMP_GIN vs CTMP_GIN_3 ===\n")
+res_ctmp_gin_3 <- repkfold_ttest(
+  data = df_ctmp_gin_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
+)
+print(res_ctmp_gin_3)
+
+cat("\n=== CTMP_GIN_3 vs GIN ===\n")
+res_gin_3 <- repkfold_ttest(
+  data = df_gin_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
+)
+print(res_gin_3)
+
+cat("\n=== CTMP_GIN_3 vs A3TGCN ===\n")
+res_a3tgcn_3 <- repkfold_ttest(
+  data = df_a3tgcn_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
+)
+print(res_a3tgcn_3)
+
+cat("\n=== CTMP_GIN_3 vs Gated_Fusion removed ===\n")
+res_no_gate_3 <- repkfold_ttest(
+  data = df_no_gate_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
+)
+print(res_no_gate_3)
+
+cat("\n=== CTMP_GIN_3 vs Preprocessing method removed ===\n")
+res_no_preprocess_3 <- repkfold_ttest(
+  data = df_no_preprocess_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
+)
+print(res_no_preprocess_3)
+
+cat("\n=== CTMP_GIN_3 vs Fully connected edge ===\n")
+res_fully_3 <- repkfold_ttest(
+  data = df_fully_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
+)
+print(res_fully_3)
