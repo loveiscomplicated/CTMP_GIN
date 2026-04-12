@@ -189,6 +189,11 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, 
             print("Calculating MI...")
             mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors)
 
+    # Guard: strip target columns if they were accidentally included in cached dict
+    for _label in ["REASON", "REASONb"]:
+        if _label in mi_dict:
+            del mi_dict[_label]
+
     ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=remove_los)
     mi_ad_dict, mi_dis_dict, mi_avg_dict = seperate_ad_dis(mi_dict=mi_dict, ad_col_list=ad_col_list, dis_col_list=dis_col_list)
     return mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict

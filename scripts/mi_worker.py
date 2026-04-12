@@ -157,6 +157,11 @@ def process_one_request_file(fname: str):
             req["cfg"],
             remove_los=remove_los
         )
+        # Remove target columns (REASON/REASONb) before computing MI
+        # to avoid including them as nodes in the graph edge index.
+        for _label in ["REASON", "REASONb"]:
+            if _label in train_df.columns:
+                train_df = train_df.drop(_label, axis=1)
         mi_dict = _get_mi_helper(
             train_df,
             req["seed"],
