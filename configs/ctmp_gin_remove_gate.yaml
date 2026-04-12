@@ -26,6 +26,8 @@ model:
     remove_proj_ad_dis: False
     remove_all_proj: True
     remove_gated_fusion: True
+    # "sum" required: remove_all_proj=True uses Identity() which needs same in/out dims.
+    readout_mode: "sum"
 
 train:
   batch_size: 256

@@ -28,6 +28,9 @@ model:
     remove_proj_ad_dis: False
     remove_all_proj: True
     remove_gated_fusion: False
+    # "sum" required: remove_all_proj=True uses Identity() which needs same in/out dims.
+    # "concat" would require gin_1_layers=1, but we preserve the original layer counts.
+    readout_mode: "sum"
 
 train:
   batch_size: 128

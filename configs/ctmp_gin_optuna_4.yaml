@@ -21,6 +21,7 @@ model:
     los_embedding_dim: 8
     gate_hidden_ch: 128 # Hidden_dim of GatedFusion, If set to None, it defaults to in_dim, which is gin_hidden_channel * 3
     dropout_p: 0.10148409632178598
+    readout_mode: "concat"  # "concat" | "sum" | "last"
 
 train:
   batch_size: 128
@@ -34,7 +35,7 @@ train:
   num_workers: 4
   optimizer: "adamw"
   weight_decay: 2.7704659212989386e-06
-  lr_scheduler_patience: 2
+  lr_scheduler_patience: 5
   early_stopping_patience: 10
   decision_threshold: 0.5
 
