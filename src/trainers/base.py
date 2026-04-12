@@ -291,25 +291,29 @@ def run_train_loop(
             model.eval()
             print(f"  Reloaded best.pt (epoch={logger.best_epoch}) for test evaluation")
 
-    with torch.no_grad():
-        test_loss, test_accuracy, test_precision, test_recall, test_f1, test_auc = evaluate(
-            model, test_dataloader, criterion, decision_threshold, device, binary, edge_index
-        )
+    if trial is not None:
+        # Optuna HPO 중에는 test evaluation skip (불필요한 연산 절감)
+        test_loss = test_accuracy = test_precision = test_recall = test_f1 = test_auc = float("nan")
+    else:
+        with torch.no_grad():
+            test_loss, test_accuracy, test_precision, test_recall, test_f1, test_auc = evaluate(
+                model, test_dataloader, criterion, decision_threshold, device, binary, edge_index
+            )
 
-    result_str = f"\n[Test] Model: {MODEL_NAME} Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}"
-    print(result_str)
-    send_discord_message(result_str)
+        result_str = f"\n[Test] Model: {MODEL_NAME} Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}"
+        print(result_str)
+        send_discord_message(result_str)
 
-    if logger is not None:
-        logger.log_metrics(last_epoch, {
-            "split": "test",
-            "test_loss": float(test_loss),
-            "test_acc": float(test_accuracy),
-            "test_precision": float(test_precision),
-            "test_recall": float(test_recall),
-            "test_f1": float(test_f1),
-            "test_auc": float(test_auc),
-        })
+        if logger is not None:
+            logger.log_metrics(last_epoch, {
+                "split": "test",
+                "test_loss": float(test_loss),
+                "test_acc": float(test_accuracy),
+                "test_precision": float(test_precision),
+                "test_recall": float(test_recall),
+                "test_f1": float(test_f1),
+                "test_auc": float(test_auc),
+            })
 
     return {
         "best_epoch": int(best_epoch) if best_epoch is not None else None,
