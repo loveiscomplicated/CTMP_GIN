@@ -27,7 +27,9 @@ def run_single_experiment(cfg,
         logger = ExperimentLogger(cfg, run_dir) # if parameter searching, turn off the logger
 
     seed = cfg["train"].get("seed", 42)
-    set_seed(seed) 
+    split_seed = cfg["train"].get("split_seed", seed)
+    model_seed = kwargs.get("model_seed", seed)
+    set_seed(split_seed)
 
     device = device_set(cfg["device"])
 
@@ -61,9 +63,11 @@ def run_single_experiment(cfg,
     train_loader, val_loader, test_loader, idx = train_test_split_stratified(dataset=dataset,  # type: ignore
                                                                                    batch_size=cfg['train']['batch_size'],
                                                                                    ratio=split_ratio,
-                                                                                   seed=seed,
+                                                                                   seed=split_seed,
                                                                                    num_workers=cfg['train']['num_workers'],
                                                                                    )
+    # split 완료 후 model seed 적용 (model 초기화/dropout 등에 영향)
+    set_seed(model_seed)
     
     train_df = dataset.processed_df.iloc[idx[0]]
 

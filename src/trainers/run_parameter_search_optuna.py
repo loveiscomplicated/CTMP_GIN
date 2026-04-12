@@ -321,14 +321,12 @@ def objective_factory(
     objective_seeds=(1,),
     bot_name="optuna_worker",
 ):
-    def objective(trial: optuna.Trial):
-        trial_seed = 10000 + trial.number
-        random.seed(trial_seed)
-        np.random.seed(trial_seed)
-        torch.manual_seed(trial_seed)
+    # split_seed: Optuna 전 trial에서 동일한 train/val/test split을 보장하는 고정 seed
+    SPLIT_SEED = 42
 
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(trial_seed)
+    def objective(trial: optuna.Trial):
+        # trial별 고유 seed: model 초기화, dropout 등에만 적용 (split에는 무관)
+        trial_seed = 10000 + trial.number
 
         cfg = copy.deepcopy(base_cfg)
         model_name = cfg["model"]["name"]
@@ -342,6 +340,7 @@ def objective_factory(
         for seed in objective_seeds:
             cfg_s = copy.deepcopy(cfg)
             cfg_s["train"]["seed"] = int(seed)
+            cfg_s["train"]["split_seed"] = SPLIT_SEED  # 모든 trial에서 동일한 split 보장
 
             try:
                 print(
@@ -361,6 +360,7 @@ def objective_factory(
                     trial=trial,
                     report_metric=report_metric,
                     mi_cache_path=mi_edge_path,
+                    model_seed=trial_seed,  # split과 독립적으로 trial별 model seed 적용
                 )
 
                 if model_name == "xgboost":
