@@ -169,6 +169,12 @@ class TEDSTensorDataset(Dataset):
             )
 
         # whatever remove_los is, LOS needs to be removed at this point.
+        # When remove_los=False, LOS stayed in df through organize_labels and is now
+        # 0-indexed (e.g. 1..37 → 0..36). Overwrite the raw LOS tensor with these
+        # organized values so that EntityEmbeddingBatch3 (used by GIN) does not
+        # receive out-of-range indices.
+        if not self.remove_los and "LOS" in df.columns:
+            LOS = df_to_tensor(df["LOS"])
         df = df.drop("LOS", axis=1, errors="ignore")
         # make pd.DataFrame into torch.Tensor.
         x_tensor = df_to_tensor(df)

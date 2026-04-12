@@ -180,17 +180,11 @@ def load_cfg(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds=(1,)):
+def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds=(1,), epochs: int = 50):
+    SPLIT_SEED = 42
+
     def objective(trial: optuna.Trial):
         trial_seed = 10000 + trial.number
-        random.seed(trial_seed)
-        np.random.seed(trial_seed)
-        torch.manual_seed(trial_seed)
-
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(trial_seed)
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
 
         cfg = copy.deepcopy(base_cfg)
         model_name = cfg["model"]["name"]
@@ -204,25 +198,15 @@ def objective_factory(base_cfg, root, report_metric="valid_auc", objective_seeds
         for seed in objective_seeds:
             cfg_s = copy.deepcopy(cfg)
             cfg_s["train"]["seed"] = int(seed)
-            
+            cfg_s["train"]["split_seed"] = SPLIT_SEED
+            cfg_s["train"]["epochs"] = epochs
+
             try:
-                mi_edge_path = None
-                '''if cfg_s["edge"].get("mi_cached", False):
-                    print("requesting mi...")
-                    mi_edge_path = request_mi(
-                        mode="single",
-                        fold=None,
-                        seed=seed,
-                        cfg=cfg_s,
-                        n_neighbors=cfg_s["edge"]["n_neighbors"],
-                    )
-                cfg_s["edge"]["cache_path"] = mi_edge_path'''
-                # out = run_single_experiment(cfg_s, root=root, trial=trial, report_metric=report_metric, mi_cached=False)
-                out = run_single_experiment(cfg_s, 
-                                            root=root, 
-                                            trial=trial, 
-                                            report_metric=report_metric, 
-                                            mi_edge_path=mi_edge_path)
+                out = run_single_experiment(cfg_s,
+                                            root=root,
+                                            trial=trial,
+                                            report_metric=report_metric,
+                                            model_seed=trial_seed)
                 
                 if model_name == "xgboost":
                     score = float(out["roc_auc"])
@@ -284,6 +268,7 @@ def run_optuna(config_path: str, root: str, n_trials: int = 50, epochs: int = 20
         root=root,
         report_metric="valid_auc",
         objective_seeds=(1,),
+        epochs=epochs,
     )
 
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True)
@@ -333,7 +318,7 @@ if __name__ == "__main__":
                 config_path=config_path,
                 root=root,
                 n_trials=args.n_trials or 50,
-                epochs=args.epochs or 20,
+                epochs=args.epochs or 50,
                 study_name=args.study_name,
                 db=db # 파라미터 전달
             )

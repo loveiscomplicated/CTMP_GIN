@@ -25,6 +25,32 @@ _RCLONE_BACKOFF_CAP  = 120.0 # seconds
 # Ensure remote dirs are created only once per worker process
 _remote_dirs_ensured = False
 
+# Startup jitter: applied once per process to spread initial API burst across workers
+_startup_jitter_applied = False
+
+
+def _apply_startup_jitter() -> None:
+    """
+    Sleep once per process to stagger parallel workers' first API calls.
+    Uses CUDA_VISIBLE_DEVICES to derive worker index (GPU 0=0s, GPU 1=8s, …).
+    """
+    global _startup_jitter_applied
+    if _startup_jitter_applied:
+        return
+    _startup_jitter_applied = True
+
+    gpu_env = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
+    try:
+        gpu_id = int(str(gpu_env).split(",")[0])
+    except (ValueError, IndexError):
+        gpu_id = 0
+
+    # 8 seconds per GPU + up to 4s random jitter → GPU9 waits ~76s max
+    jitter = gpu_id * 8 + random.uniform(0, 4)
+    if jitter > 0:
+        print(f"[request_mi] startup jitter {jitter:.1f}s (GPU={gpu_id})")
+        time.sleep(jitter)
+
 
 def _is_rate_limit_error(err: subprocess.CalledProcessError) -> bool:
     combined = (err.stdout or "") + (err.stderr or "")
@@ -138,7 +164,7 @@ def request_mi(
     seed: int,
     cfg: dict,
     n_neighbors: int,
-    poll_interval_sec: int = 3,
+    poll_interval_sec: int = 30,
     timeout_sec: int | None = None,
     serialize_cfg_default_str: bool = True,
     verbose_poll: bool = False,
@@ -168,6 +194,9 @@ def request_mi(
     Returns:
         str: local pickle path
     """
+    # Stagger workers on first call to avoid simultaneous API burst
+    _apply_startup_jitter()
+
     remove_los = True
     model_name = cfg["model"].get("name", None)
     if model_name in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]:

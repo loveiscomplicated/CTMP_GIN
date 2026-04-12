@@ -320,6 +320,7 @@ def objective_factory(
     report_metric="valid_auc",
     objective_seeds=(1,),
     bot_name="optuna_worker",
+    epochs: int = 50,
 ):
     # split_seed: Optuna 전 trial에서 동일한 train/val/test split을 보장하는 고정 seed
     SPLIT_SEED = 42
@@ -341,6 +342,7 @@ def objective_factory(
             cfg_s = copy.deepcopy(cfg)
             cfg_s["train"]["seed"] = int(seed)
             cfg_s["train"]["split_seed"] = SPLIT_SEED  # 모든 trial에서 동일한 split 보장
+            cfg_s["train"]["epochs"] = epochs  # --epochs 인자로 config 값 override
 
             try:
                 print(
@@ -439,6 +441,7 @@ def run_optuna(
         report_metric="valid_auc",
         objective_seeds=(1,),
         bot_name=f"optuna_{study_name}_gpu{gpu_id}",
+        epochs=epochs,
     )
 
     print(
