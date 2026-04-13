@@ -76,6 +76,13 @@ UPLOAD_RETRIES="__UPLOAD_RETRIES__"
 SEND_MESSAGE_PY="__SEND_MESSAGE_PY__"
 BOT_NAME="__BOT_NAME__"
 
+# -----------------------
+# Log file (stdout + stderr 모두 파일로 저장)
+# -----------------------
+LOG_FILE="${WORKSPACE_ROOT}/train_${MODEL_NAME}_seed${SEED}.log"
+mkdir -p "$WORKSPACE_ROOT"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 notify() {
   local msg="$1"
   if [[ -f "$SEND_MESSAGE_PY" ]]; then
@@ -244,6 +251,9 @@ while [[ $attempt -le $UPLOAD_RETRIES ]]; do
 done
 
 if [[ $ok -eq 1 ]]; then
+  # 로그 파일도 업로드
+  rclone copy "$LOG_FILE" "${RCLONE_REMOTE}:${RCLONE_DEST_DIR}/logs/" \
+      --retries 3 --low-level-retries 5 || true
   notify "[SUCCESS] Upload completed: ${RCLONE_REMOTE}:${RCLONE_DEST_DIR}"
   echo "[$(ts)] shutting down..."
   # -----------------------
@@ -265,6 +275,9 @@ if [[ $ok -eq 1 ]]; then
   kill -TERM 1 || true
   exit 0
 else
+  # 업로드 실패해도 로그만큼은 별도로 시도
+  rclone copy "$LOG_FILE" "${RCLONE_REMOTE}:${RCLONE_DEST_DIR}/logs/" \
+      --retries 3 --low-level-retries 5 || true
   notify "[UPLOAD_FAIL] Upload failed after ${UPLOAD_RETRIES} attempts. Holding without shutdown."
   hold_forever
 fi
