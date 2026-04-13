@@ -153,9 +153,13 @@ def run_kfold_experiment(cfg, root):
             model.precompute_edge_index_2(edge_index, cfg["train"]["batch_size"])
 
         # Save for later analysis scripts (extract, permutation, reeval)
-        edge_index_save_path = os.path.join(fold_dir, "edge_index.pt")
-        torch.save(edge_index.cpu(), edge_index_save_path)
-        print(f"  edge_index saved: {edge_index_save_path}")
+        # MI-based edge_index만 저장 (fully connected는 trivially 재생성 가능하고 용량이 매우 큼)
+        if cfg.get("edge", {}).get("is_mi_based", False):
+            edge_index_save_path = os.path.join(fold_dir, "edge_index.pt")
+            torch.save(edge_index.cpu(), edge_index_save_path)
+            print(f"  edge_index saved: {edge_index_save_path}")
+        else:
+            print(f"  edge_index save skipped (not MI-based, fully connected is trivially reconstructable)")
 
         print(f"edge index: \n{edge_index}")
         print(f"edge index shape: \n{edge_index.shape}")

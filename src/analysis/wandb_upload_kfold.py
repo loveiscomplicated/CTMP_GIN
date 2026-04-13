@@ -44,16 +44,19 @@ def upload_jsonl_to_wandb(
 
 
 if __name__ == "__main__":
+    import re
+
     cur_dir = os.path.dirname(__file__)
     runs_protected_path = os.path.join(cur_dir, "..", "..", "runs", "protected")
-    model_name = "final_ctmp_gin"
-    seed = 2
-    common_path = os.path.join(
-        runs_protected_path,
-        "k_fold_CV",
-        "(final)20260411-061107__ctmp_gin__bs=512__lr=2.23e-04__seed=2__cv=5__test=0.15",
-        "folds",
-    )
+    model_name = "ctmp_gin_remove_gate"
+    run_dir = "(final)remove_gate_20260413-071839__ctmp_gin__bs=1024__lr=6.10e-04__seed=3__cv=5__test=0.15"
+    # common_path = os.path.join(runs_protected_path, "k_fold_CV", run_dir, "folds")
+    common_path = os.path.join(runs_protected_path, "ablation", run_dir, "folds")
+
+    match = re.search(r"__seed=(\d+)__", run_dir)
+    if match is None:
+        raise ValueError(f"seed를 run_dir에서 찾을 수 없습니다: {run_dir}")
+    seed = int(match.group(1))
     # 자동화 예시
     for i in range(5):
         fold_path = os.path.join(common_path, f"fold_{i}", "metrics.jsonl")
@@ -64,7 +67,7 @@ if __name__ == "__main__":
 
         upload_jsonl_to_wandb(
             file_path=fold_path,
-            project_name="ctmp_gin",
+            project_name="ctmp_gin_final",
             group_name=f"{model_name}_kfold",  # 시드별로 그룹을 묶는 것도 방법
             run_name=run_name,
             job_type="kfold",
