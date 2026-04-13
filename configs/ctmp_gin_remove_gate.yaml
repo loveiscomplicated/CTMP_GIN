@@ -24,7 +24,7 @@ model:
     dropout_p: 0.1242026370635674
     readout_mode: "concat"  # "concat" | "sum" | "last"
     remove_proj_ad_dis: False
-    remove_all_proj: True
+    remove_all_proj: False
     remove_gated_fusion: True
 
 train:
