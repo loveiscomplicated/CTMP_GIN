@@ -29,7 +29,7 @@ def parse_args():
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--decision_threshold", type=float, default=None)
     p.add_argument("--binary", type=int, default=None)
-    p.add_argument("--cv", type=lambda x: x.lower() not in ("false", "0", "no"), default=True)
+    p.add_argument("--cv", type=lambda x: x.lower() not in ("false", "0", "no"), default=None)
     return p.parse_args()
 
 
