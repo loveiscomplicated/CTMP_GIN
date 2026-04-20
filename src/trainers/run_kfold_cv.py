@@ -159,7 +159,9 @@ def run_kfold_experiment(cfg, root):
             torch.save(edge_index.cpu(), edge_index_save_path)
             print(f"  edge_index saved: {edge_index_save_path}")
         else:
-            print(f"  edge_index save skipped (not MI-based, fully connected is trivially reconstructable)")
+            print(
+                f"  edge_index save skipped (not MI-based, fully connected is trivially reconstructable)"
+            )
 
         print(f"edge index: \n{edge_index}")
         print(f"edge index shape: \n{edge_index.shape}")
