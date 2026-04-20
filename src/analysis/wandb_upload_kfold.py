@@ -48,10 +48,10 @@ if __name__ == "__main__":
 
     cur_dir = os.path.dirname(__file__)
     runs_protected_path = os.path.join(cur_dir, "..", "..", "runs", "protected")
-    model_name = "ctmp_gin_remove_gate"
-    run_dir = "(final)remove_gate_20260413-071839__ctmp_gin__bs=1024__lr=6.10e-04__seed=3__cv=5__test=0.15"
-    # common_path = os.path.join(runs_protected_path, "k_fold_CV", run_dir, "folds")
-    common_path = os.path.join(runs_protected_path, "ablation", run_dir, "folds")
+    model_name = "ctmp_gin"
+    run_dir = "(final)20260413-071956__ctmp_gin__bs=1024__lr=6.10e-04__seed=1__cv=5__test=0.15"
+    common_path = os.path.join(runs_protected_path, "k_fold_CV", run_dir, "folds")
+    # common_path = os.path.join(runs_protected_path, "ablation", run_dir, "folds")
 
     match = re.search(r"__seed=(\d+)__", run_dir)
     if match is None:
