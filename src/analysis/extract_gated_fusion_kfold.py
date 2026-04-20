@@ -16,9 +16,9 @@ Then average across folds and save:
 This output is directly usable by los_group_detection.py.
 
 Usage:
-    python src/analysis/extract_gated_fusion_kfold.py \
-        --run_name "20260302-143833__ctmp_gin__bs=256__lr=2.00e-04__seed=1__cv=5__test=0.15" \
-        --device mps
+python src/analysis/extract_gated_fusion_kfold.py \
+    --run_name "(final)20260413-071956__ctmp_gin__bs=1024__lr=6.10e-04__seed=1__cv=5__test=0.15" \
+    --device mps
 """
 
 from __future__ import annotations
@@ -76,6 +76,7 @@ def parse_args():
 
 def load_yaml(path):
     import yaml
+
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
@@ -89,8 +90,11 @@ def _parse_fold_arg(fold_str: str, n_folds: int) -> list[int]:
     return [fold_id]
 
 
-def _load_fold_model(fold_dir: str, device: torch.device):
-    ckpt_path = os.path.join(fold_dir, "checkpoints", "last.pt")
+def _load_fold_model(fold_dir: str, device: torch.device, best_or_last: str = "best"):
+    if best_or_last == "best":
+        ckpt_path = os.path.join(fold_dir, "checkpoints", "best.pt")
+    else:  # best_or_last == "last"
+        ckpt_path = os.path.join(fold_dir, "checkpoints", "last.pt")
     ckpt = torch.load(ckpt_path, map_location=device)
     cfg = ckpt["cfg"]
     cfg["model"]["params"]["device"] = str(device)
@@ -98,7 +102,7 @@ def _load_fold_model(fold_dir: str, device: torch.device):
     model = build_model(
         model_name=cfg["model"]["name"], **cfg["model"].get("params", {})
     ).to(device)
-    model.load_state_dict(ckpt["model_state_dict"])
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
     model.eval()
     return model, cfg
 
@@ -144,8 +148,8 @@ def extract_weights_one_fold(
     finally:
         hook_handle.remove()
 
-    w_all = torch.cat(captured_w, dim=0).numpy()   # [N, 3]
-    los_all = torch.cat(all_los, dim=0).numpy()     # [N]
+    w_all = torch.cat(captured_w, dim=0).numpy()  # [N, 3]
+    los_all = torch.cat(all_los, dim=0).numpy()  # [N]
 
     df = pd.DataFrame(
         {
@@ -168,34 +172,26 @@ def extract_weights_one_fold_with_edge(
     batch_size: int,
 ) -> pd.DataFrame:
     """
-    Run the test set (pre-loaded tensors) through the model with a forward hook.
+    Run the test set (pre-loaded tensors) through the model using return_internals=True.
     Returns DataFrame with columns: w_ad, w_dis, w_merged, LOS
     """
-    captured_w: list[torch.Tensor] = []
-
-    def _hook(module, input, output):
-        _, w, _ = output
-        captured_w.append(w.detach().cpu())
-
     if not hasattr(model, "gated_fusion") or model.gated_fusion is None:
         raise AttributeError("model.gated_fusion not found or None.")
 
-    hook_handle = model.gated_fusion.register_forward_hook(_hook)
     N = all_x.size(0)
+    all_w: list[torch.Tensor] = []
 
-    try:
-        model.eval()
-        with torch.no_grad():
-            for start in range(0, N, batch_size):
-                end = min(start + batch_size, N)
-                x_b = all_x[start:end].to(device)
-                los_b = all_los[start:end].to(device)
-                model(x_b, los_b, edge_index, device=device)
-    finally:
-        hook_handle.remove()
+    model.eval()
+    with torch.no_grad():
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            x_b = all_x[start:end].to(device)
+            los_b = all_los[start:end].to(device)
+            _, _, w, _, _, _, _ = model(x_b, los_b, edge_index, return_internals=True)
+            all_w.append(w.detach().cpu())
 
-    w_arr = torch.cat(captured_w, dim=0).numpy()   # [N, 3]
-    los_arr = all_los.numpy().astype(int)           # [N]
+    w_arr = torch.cat(all_w, dim=0).numpy()  # [N, 3]
+    los_arr = all_los.numpy().astype(int)  # [N]
 
     return pd.DataFrame(
         {
@@ -215,9 +211,8 @@ def aggregate_by_los(dfs: list[pd.DataFrame]) -> pd.DataFrame:
         LOS | w_ad_mean | w_dis_mean | w_merged_mean | n_samples
     """
     combined = pd.concat(dfs, ignore_index=True)
-    agg = (
-        combined.groupby("LOS")[["w_ad", "w_dis", "w_merged"]]
-        .agg(["mean", "std", "count"])
+    agg = combined.groupby("LOS")[["w_ad", "w_dis", "w_merged"]].agg(
+        ["mean", "std", "count"]
     )
     # Flatten multi-level columns: (w_ad, mean) -> w_ad_mean
     agg.columns = ["_".join(c) for c in agg.columns]
@@ -249,7 +244,12 @@ def _sanity_check(
     with torch.no_grad():
         for start in range(0, N, batch_size):
             end = min(start + batch_size, N)
-            logits = model(all_x[start:end].to(device), all_los[start:end].to(device), edge_index, device=device)
+            logits = model(
+                all_x[start:end].to(device),
+                all_los[start:end].to(device),
+                edge_index,
+                device=device,
+            )
             all_logits.append(logits.cpu())
     logits_cat = torch.cat(all_logits, dim=0).squeeze(-1)  # [N]
     scores = torch.sigmoid(logits_cat).numpy()
@@ -272,8 +272,12 @@ def _sanity_check(
                 break
 
     # --- quick diagnostic ---
-    print(f"  [Sanity] scores: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}")
-    print(f"  [Sanity] targets: pos_rate={targets.mean():.4f} ({targets.sum()}/{len(targets)})")
+    print(
+        f"  [Sanity] scores: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}"
+    )
+    print(
+        f"  [Sanity] targets: pos_rate={targets.mean():.4f} ({targets.sum()}/{len(targets)})"
+    )
     print(f"  [Sanity] preds:   pos_rate={preds.mean():.4f}")
     # -------------------------
     print(f"  [Sanity] recomputed  — AUC={auc:.6f}, ACC={acc:.6f}")
@@ -282,7 +286,9 @@ def _sanity_check(
         acc_delta = abs(acc - stored_acc)
         flag = " *** MISMATCH ***" if auc_delta > 0.005 else ""
         print(f"  [Sanity] stored      — AUC={stored_auc:.6f}, ACC={stored_acc:.6f}")
-        print(f"  [Sanity] delta       — ΔAUC={auc_delta:.6f}, ΔACC={acc_delta:.6f}{flag}")
+        print(
+            f"  [Sanity] delta       — ΔAUC={auc_delta:.6f}, ΔACC={acc_delta:.6f}{flag}"
+        )
 
 
 def _get_train_df_for_fold(
@@ -363,17 +369,23 @@ def main():
         drop_last=False,
     )
     for x, y, los in loader:
-        xs.append(x); ys.append(y); lss.append(los)
+        xs.append(x)
+        ys.append(y)
+        lss.append(los)
     all_x = torch.cat(xs, dim=0)
     all_y = torch.cat(ys, dim=0)
     all_los = torch.cat(lss, dim=0)
-    print(f"  all_x: {tuple(all_x.shape)}, all_los range: [{all_los.min()}, {all_los.max()}]")
+    print(
+        f"  all_x: {tuple(all_x.shape)}, all_los range: [{all_los.min()}, {all_los.max()}]"
+    )
 
     # Extract per-fold
     fold_dfs: list[pd.DataFrame] = []
     for fold_id in folds_to_run:
         fold_dir = str(run_dir / "folds" / f"fold_{fold_id}")
-        fold_cfg = load_yaml(str(run_dir / "folds" / f"fold_{fold_id}" / "config.final.yaml"))
+        fold_cfg = load_yaml(
+            str(run_dir / "folds" / f"fold_{fold_id}" / "config.final.yaml")
+        )
         print(f"\n=== Fold {fold_id}: building edge_index ===")
 
         # Load saved edge_index if available; otherwise recompute
@@ -410,19 +422,36 @@ def main():
             device=device,
             batch_size=batch_size,
         )
-        print(f"  Collected {len(df_fold)} samples, LOS range [{df_fold['LOS'].min()}, {df_fold['LOS'].max()}]")
-        print(f"  Mean weights — w_ad={df_fold['w_ad'].mean():.3f}, w_dis={df_fold['w_dis'].mean():.3f}, w_merged={df_fold['w_merged'].mean():.3f}")
+        print(
+            f"  Collected {len(df_fold)} samples, LOS range [{df_fold['LOS'].min()}, {df_fold['LOS'].max()}]"
+        )
+        print(
+            f"  Mean weights — w_ad={df_fold['w_ad'].mean():.3f}, w_dis={df_fold['w_dis'].mean():.3f}, w_merged={df_fold['w_merged'].mean():.3f}"
+        )
 
         # Sanity check: recompute test AUC/ACC and compare to stored metrics
-        _sanity_check(model, all_x, all_los, all_y, edge_index, device, batch_size,
-                      fold_id, run_dir)
+        _sanity_check(
+            model,
+            all_x,
+            all_los,
+            all_y,
+            edge_index,
+            device,
+            batch_size,
+            fold_id,
+            run_dir,
+        )
 
         fold_dfs.append(df_fold)
 
     # Aggregate
     print(f"\n=== Aggregating across {len(fold_dfs)} fold(s) ===")
     df_agg = aggregate_by_los(fold_dfs)
-    print(df_agg[["LOS", "w_ad_mean", "w_dis_mean", "w_merged_mean", "n_samples"]].to_string(index=False))
+    print(
+        df_agg[
+            ["LOS", "w_ad_mean", "w_dis_mean", "w_merged_mean", "n_samples"]
+        ].to_string(index=False)
+    )
 
     # Save
     output_path = Path(args.output)
