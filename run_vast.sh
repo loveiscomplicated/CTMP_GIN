@@ -5,8 +5,8 @@ set -euo pipefail
 # Args
 # -----------------------
 if [[ $# -lt 3 ]]; then
-  echo "Usage: bash run.sh <model_name> <config_path> <seed>"
-  echo "Example: bash run.sh gin configs/gin.yaml 1"
+  echo "Usage: bash run_vast.sh <model_name> <config_path> <seed>"
+  echo "Example: bash run_vast.sh gin configs/gin.yaml 1"
   exit 1
 fi
 
@@ -16,7 +16,7 @@ SEED="$3"
 
 echo "model_name: ${MODEL_NAME}"
 echo "config    : ${CONFIG_PATH}"
-echo "seed      : ${SEED}" 
+echo "seed      : ${SEED}"
 
 # -----------------------
 # Constants
@@ -24,7 +24,8 @@ echo "seed      : ${SEED}"
 WORKSPACE_ROOT="/workspace"
 REPO_URL="https://github.com/loveiscomplicated/CTMP_GIN.git"
 REPO_DIR="${WORKSPACE_ROOT}/CTMP_GIN"
-BRANCH="runpod"
+# Adjust to your Vast.ai deployment branch if different.
+BRANCH="vast"
 
 CONDA_DIR="$HOME/miniconda3"
 CONDA_SH="${CONDA_DIR}/etc/profile.d/conda.sh"
@@ -41,7 +42,10 @@ UPLOAD_RETRIES=3
 
 # notifier
 SEND_MESSAGE_PY="${REPO_DIR}/src/utils/send_message.py"
-BOT_NAME="Runpod_main_py_$MODEL_NAME"
+BOT_NAME="Vast_main_py_$MODEL_NAME"
+
+# vast termination helper
+VAST_TERMINATE_SH="${REPO_DIR}/scripts/vast_terminate.sh"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
@@ -75,9 +79,12 @@ UPLOAD_RETRIES="__UPLOAD_RETRIES__"
 
 SEND_MESSAGE_PY="__SEND_MESSAGE_PY__"
 BOT_NAME="__BOT_NAME__"
+VAST_TERMINATE_SH="__VAST_TERMINATE_SH__"
 
 export DISCORD_WEBHOOK_URL="__DISCORD_WEBHOOK_URL__"
 export RCLONE_CONF_B64="__RCLONE_CONF_B64__"
+export CONTAINER_API_KEY="__CONTAINER_API_KEY__"
+export VAST_INSTANCE_ID="__VAST_INSTANCE_ID__"
 
 # -----------------------
 # Log file (stdout + stderr 모두 파일로 저장)
@@ -105,20 +112,21 @@ echo "[$(ts)] model_name: $MODEL_NAME"
 echo "[$(ts)] config    : $CONFIG_PATH"
 echo "[$(ts)] seed      : $SEED"
 
-# 추가 (여기)
-echo "[$(ts)] RUNPOD_POD_ID='${RUNPOD_POD_ID:-}'"
-if command -v runpodctl >/dev/null 2>&1; then
-  echo "[$(ts)] runpodctl: $(command -v runpodctl)"
-  runpodctl --version || true
+# Vast.ai environment diagnostics
+echo "[$(ts)] VAST_CONTAINERLABEL='${VAST_CONTAINERLABEL:-}'"
+echo "[$(ts)] VAST_INSTANCE_ID='${VAST_INSTANCE_ID:-}'"
+if command -v vastai >/dev/null 2>&1; then
+  echo "[$(ts)] vastai: $(command -v vastai)"
+  vastai --version || true
 else
-  echo "[$(ts)] runpodctl not found"
+  echo "[$(ts)] vastai CLI not found (will be installed at termination time)"
 fi
 
 # -----------------------
 # System deps
 # -----------------------
 apt update
-apt install -y tmux rclone git wget
+apt install -y tmux rclone git wget python3-pip
 
 # tmux mouse
 echo "set -g mouse on" >> ~/.tmux.conf || true
@@ -158,26 +166,19 @@ source "$CONDA_SH"
 # ----------------------------------
 # Accept Anaconda ToS (non-interactive fix)
 # ----------------------------------
-# conda 함수 초기화 (tmux/non-interactive에서 중요)
 conda activate base || true
 
-# conda가 실제로 어디 걸리는지 로그로 확인
 echo "[$(ts)] conda: $(command -v conda)"
 conda --version
 
-# ToS accept (base에 확실히 기록)
-# conda 함수 초기화
 conda activate base || true
 
-# conda 경로 확인(진짜 실행 파일도 같이 보이게)
 echo "[$(ts)] conda: $(type -a conda | head -n 2)"
 conda --version
 
-# ToS accept (에러 메시지에 나온 그대로)
 conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
 conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
 
-# (선택) defaults 채널을 명시적으로 써서 override mismatch 방지
 conda config --set channels defaults || true
 conda config --set channel_priority flexible || true
 
@@ -212,7 +213,7 @@ gdown "$GDOWN_FILE_ID"
 cd "$REPO_DIR"
 echo "[$(ts)] training start"
 set +e
-python -m src.main_runpod --config "$CONFIG_PATH" --seed "$SEED"
+python -m src.main --config "$CONFIG_PATH" --seed "$SEED"
 TRAIN_RC=$?
 set -e
 
@@ -254,31 +255,23 @@ while [[ $attempt -le $UPLOAD_RETRIES ]]; do
 done
 
 if [[ $ok -eq 1 ]]; then
-  # 로그 파일도 업로드
   rclone copy "$LOG_FILE" "${RCLONE_REMOTE}:${RCLONE_DEST_DIR}/logs/" \
       --retries 3 --low-level-retries 5 || true
   notify "[SUCCESS] Upload completed: ${RCLONE_REMOTE}:${RCLONE_DEST_DIR}"
   echo "[$(ts)] shutting down..."
   # -----------------------
-  # Stop/Terminate pod (RunPod-native)
+  # Stop instance (Vast.ai-native)
   # -----------------------
-  echo "[$(ts)] stopping pod via runpodctl..."
-
-  if command -v runpodctl >/dev/null 2>&1 && [[ -n "${RUNPOD_POD_ID:-}" ]]; then
-    # 1) stop (보통 과금 멈추는 목적이면 이걸 우선)
-    runpodctl stop pod "$RUNPOD_POD_ID" && exit 0
-
-    # 2) stop이 안 되면 remove(terminate) 시도
-    runpodctl remove pod "$RUNPOD_POD_ID" && exit 0
-
-    echo "[$(ts)] runpodctl stop/remove failed; falling back to process exit."
+  export SEND_MESSAGE_PY BOT_NAME
+  if [[ -f "$VAST_TERMINATE_SH" ]]; then
+    bash "$VAST_TERMINATE_SH"
+  else
+    notify "[TERMINATE_SKIP] vast_terminate.sh not found at $VAST_TERMINATE_SH. Holding."
+    hold_forever
   fi
-
-  # fallback: 컨테이너 프로세스 종료 (환경에 따라 pod가 내려갈 수도/아닐 수도)
-  kill -TERM 1 || true
-  exit 0
+  # If vast_terminate.sh returns here, instance did not stop; hold as a safety net.
+  hold_forever
 else
-  # 업로드 실패해도 로그만큼은 별도로 시도
   rclone copy "$LOG_FILE" "${RCLONE_REMOTE}:${RCLONE_DEST_DIR}/logs/" \
       --retries 3 --low-level-retries 5 || true
   notify "[UPLOAD_FAIL] Upload failed after ${UPLOAD_RETRIES} attempts. Holding without shutdown."
@@ -305,13 +298,16 @@ PIPELINE="${PIPELINE//__RCLONE_REMOTE__/${RCLONE_REMOTE}}"
 PIPELINE="${PIPELINE//__RCLONE_DEST_DIR__/${RCLONE_DEST_DIR}}"
 PIPELINE="${PIPELINE//__UPLOAD_RETRIES__/${UPLOAD_RETRIES}}"
 PIPELINE="${PIPELINE//__SEND_MESSAGE_PY__/${SEND_MESSAGE_PY}}"
+PIPELINE="${PIPELINE//__BOT_NAME__/${BOT_NAME}}"
+PIPELINE="${PIPELINE//__VAST_TERMINATE_SH__/${VAST_TERMINATE_SH}}"
 PIPELINE="${PIPELINE//__DISCORD_WEBHOOK_URL__/${DISCORD_WEBHOOK_URL:-}}"
 PIPELINE="${PIPELINE//__RCLONE_CONF_B64__/${RCLONE_CONF_B64:-}}"
+PIPELINE="${PIPELINE//__CONTAINER_API_KEY__/${CONTAINER_API_KEY:-}}"
+PIPELINE="${PIPELINE//__VAST_INSTANCE_ID__/${VAST_INSTANCE_ID:-}}"
 
 # -----------------------
 # tmux session: create and start
 # -----------------------
-# Ensure tmux exists BEFORE using it
 apt update
 apt install -y tmux
 
@@ -328,9 +324,10 @@ PIPE_PATH="/tmp/${MODEL_NAME}__pipeline.sh"
 printf "%s" "$PIPELINE" > "$PIPE_PATH"
 chmod +x "$PIPE_PATH"
 
-# Run pipeline in that tmux session
 tmux set-environment -t "${SESSION_NAME}" RCLONE_CONF_B64 "${RCLONE_CONF_B64:-}"
 tmux set-environment -t "${SESSION_NAME}" DISCORD_WEBHOOK_URL "${DISCORD_WEBHOOK_URL:-}"
+tmux set-environment -t "${SESSION_NAME}" CONTAINER_API_KEY "${CONTAINER_API_KEY:-}"
+tmux set-environment -t "${SESSION_NAME}" VAST_INSTANCE_ID "${VAST_INSTANCE_ID:-}"
 tmux send-keys -t "${SESSION_NAME}" "bash $PIPE_PATH" C-m
 
 echo "[$(ts)] started in tmux session '${SESSION_NAME}'."
