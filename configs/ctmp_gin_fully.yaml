@@ -32,6 +32,7 @@ train:
   weight_decay: 1.1058007626429544e-05
   lr_scheduler_patience: 5
   early_stopping_patience: 10 # 원래 10
+  save_every: 0 # disable periodic epoch checkpoints; only best.pt and last.pt are kept
   decision_threshold: 0.5
 
   ig_label: False # include Neutral labels for Integrated Gradients Method
