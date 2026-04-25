@@ -38,5 +38,5 @@ train:
   lr_scheduler_patience: 5
   early_stopping_patience: 10
   decision_threshold: 0.5
-  cv: False
+  cv: True
   n_folds: 5
