@@ -48,8 +48,8 @@ if __name__ == "__main__":
 
     cur_dir = os.path.dirname(__file__)
     runs_protected_path = os.path.join(cur_dir, "..", "..", "runs", "protected")
-    model_name = "a3tgcn"
-    run_dir = "(final)20260421-133347__a3tgcn_2_points__bs=32__lr=1.26e-03__seed=3__cv=5__test=0.15"
+    model_name = "gingru"
+    run_dir = "(final)20260425-120611__gin_gru_2_points__bs=512__lr=5.69e-04__seed=2__cv=5__test=0.15"
     common_path = os.path.join(runs_protected_path, "k_fold_CV", run_dir, "folds")
     # common_path = os.path.join(runs_protected_path, "ablation", run_dir, "folds")
 
