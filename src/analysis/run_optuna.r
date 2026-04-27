@@ -2,58 +2,68 @@
 # install.packages("correctR")
 library(correctR)
 
+# ============================================================
+# 데이터 출처: wandb_export_2026-04-27T10_22_22_952_09_00.csv
+# 모든 값은 test_auc 컬럼 기준
+# 순서: Seed 3 (Fold 4→0), Seed 2 (Fold 4→0), Seed 1 (Fold 4→0)
+# ============================================================
+
 # 1. 데이터를 1차원 벡터로 평탄화 (Flatten)
-# 모든 모델 동일 순서: Seed 3의 Fold 4→0, Seed 2의 Fold 4→0, Seed 1의 Fold 4→0
-# (ctmp_gin의 wandb 기록 순서에 맞춰 통일)
 ctmp_gin_auc <- c(
-  0.95539, 0.95488, 0.95517, 0.95493, 0.95506, # Seed 3 (Fold 4~0)
-  0.95365, 0.95374, 0.95369, 0.95379, 0.95378, # Seed 2 (Fold 4~0)
-  0.95386, 0.95431, 0.95346, 0.95443, 0.95389  # Seed 1 (Fold 4~0)
+  0.95490, 0.95496, 0.95570, 0.95547, 0.95507, # Seed 3 (Fold 4~0)
+  0.95500, 0.95503, 0.95458, 0.95508, 0.95500, # Seed 2 (Fold 4~0)
+  0.95537, 0.95519, 0.95507, 0.95526, 0.95490  # Seed 1 (Fold 4~0)
 )
 
-# [수정] gin의 seed 순서를 ctmp_gin과 동일하게 맞춤 (기존: Seed 1→3→2, 수정: Seed 3→2→1)
 gin_auc <- c(
-  0.95336, 0.95325, 0.95343, 0.95312, 0.95321, # Seed 3 (Fold 4~0)
-  0.95361, 0.95321, 0.95367, 0.95318, 0.95368, # Seed 2 (Fold 4~0)
-  0.95339, 0.95356, 0.95344, 0.95351, 0.95322  # Seed 1 (Fold 4~0)
+  0.95277, 0.95281, 0.95274, 0.95300, 0.95287, # Seed 3 (Fold 4~0)
+  0.95323, 0.95286, 0.95258, 0.95305, 0.95292, # Seed 2 (Fold 4~0)
+  0.95339, 0.95348, 0.95378, 0.95359, 0.95379  # Seed 1 (Fold 4~0)
 )
 
 a3tgcn_auc <- c(
-  0.95235, 0.95210, 0.95286, 0.95268, 0.95268, # Seed 3 (Fold 4~0)
-  0.95223, 0.95247, 0.95241, 0.95247, 0.95285, # Seed 2 (Fold 4~0)
-  0.95257, 0.95310, 0.95301, 0.95296, 0.95264  # Seed 1 (Fold 4~0)
+  0.95466, 0.95438, 0.95429, 0.95460, 0.95488, # Seed 3 (Fold 4~0)
+  0.95375, 0.95420, 0.95418, 0.95390, 0.95384, # Seed 2 (Fold 4~0)
+  0.95479, 0.95304, 0.95499, 0.95522, 0.95474  # Seed 1 (Fold 4~0)
 )
 
-# [수정] wandb CSV 최신 값으로 업데이트
+# ctmp_gin_remove_gate (Gated Fusion 제거 ablation)
 no_gate_auc <- c(
-  0.95415, 0.95286, 0.95387, 0.95302, 0.95286, # Seed 3 (Fold 4~0)
-  0.95274, 0.95337, 0.95352, 0.95375, 0.95340, # Seed 2 (Fold 4~0)
-  0.95230, 0.95337, 0.95218, 0.95284, 0.95275  # Seed 1 (Fold 4~0)
+  0.95415, 0.95373, 0.95402, 0.95457, 0.95406, # Seed 3 (Fold 4~0)
+  0.95455, 0.95513, 0.95508, 0.95531, 0.95505, # Seed 2 (Fold 4~0)
+  0.95567, 0.95505, 0.95559, 0.95594, 0.95591  # Seed 1 (Fold 4~0)
 )
 
-# [수정] wandb CSV 최신 값으로 업데이트
+# ctmp_gin_no_preprocessing (전처리 제거 ablation)
 no_process_auc <- c(
-  0.95491, 0.95484, 0.95412, 0.95499, 0.95484, # Seed 3 (Fold 4~0)
-  0.95428, 0.95418, 0.95451, 0.95400, 0.95426, # Seed 2 (Fold 4~0)
-  0.95495, 0.95494, 0.95530, 0.95523, 0.95513  # Seed 1 (Fold 4~0)
+  0.95436, 0.95395, 0.95393, 0.95431, 0.95390, # Seed 3 (Fold 4~0)
+  0.95469, 0.95469, 0.95485, 0.95496, 0.95482, # Seed 2 (Fold 4~0)
+  0.95546, 0.95511, 0.95550, 0.95544, 0.95541  # Seed 1 (Fold 4~0)
 )
 
-# [수정] wandb CSV 최신 값으로 업데이트
+# ctmp_gin_fully_connected_edge (완전 연결 엣지 ablation)
 fully_auc <- c(
-  0.95514, 0.95451, 0.95493, 0.95463, 0.95451, # Seed 3 (Fold 4~0)
-  0.95412, 0.95385, 0.95431, 0.95343, 0.95404, # Seed 2 (Fold 4~0)
-  0.95535, 0.95482, 0.95485, 0.95520, 0.95492  # Seed 1 (Fold 4~0)
+  0.95469, 0.95477, 0.95491, 0.95483, 0.95509, # Seed 3 (Fold 4~0)
+  0.95435, 0.95429, 0.95468, 0.95456, 0.95440, # Seed 2 (Fold 4~0)
+  0.95466, 0.95524, 0.95522, 0.95501, 0.95506  # Seed 1 (Fold 4~0)
+)
+
+# [신규] gingru 모델 (CSV에 새로 추가된 baseline)
+gingru_auc <- c(
+  0.95273, 0.95296, 0.95243, 0.95287, 0.95300, # Seed 3 (Fold 4~0)
+  0.95171, 0.95138, 0.95168, 0.95141, 0.95218, # Seed 2 (Fold 4~0)
+  0.95183, 0.95199, 0.95217, 0.95201, 0.95203  # Seed 1 (Fold 4~0)
 )
 
 
 # 2. 반복(k, r) 인덱스 생성
-# k (Fold 번호): 1~5가 3번 반복됨 (1 2 3 4 5 1 2 3 4 5 1 2 3 4 5)
+# k (Fold 번호): 1~5가 3번 반복됨
 k_seq <- rep(1:5, times = 3)
-# r (Seed 번호): 1, 2, 3이 각각 5번씩 반복됨 (1 1 1 1 1 2 2 2 2 2 3 3 3 3 3)
+# r (Seed 번호): 1, 2, 3이 각각 5번씩 반복됨
 r_seq <- rep(1:3, each = 5)
 
 # 3. correctR 규격에 맞는 데이터프레임 구성
-# CTMP_GIN vs GIN 데이터
+# CTMP_GIN vs GIN
 df_gin <- data.frame(
   model = rep(c("CTMP_GIN", "GIN"), each = 15),
   values = c(ctmp_gin_auc, gin_auc),
@@ -61,7 +71,7 @@ df_gin <- data.frame(
   r = rep(r_seq, times = 2)
 )
 
-# CTMP_GIN vs A3TGCN 데이터
+# CTMP_GIN vs A3TGCN
 df_a3tgcn <- data.frame(
   model = rep(c("CTMP_GIN", "A3TGCN"), each = 15),
   values = c(ctmp_gin_auc, a3tgcn_auc),
@@ -69,7 +79,7 @@ df_a3tgcn <- data.frame(
   r = rep(r_seq, times = 2)
 )
 
-# CTMP_GIN vs Ablation 데이터 - no_gate
+# CTMP_GIN vs Ablation - no_gate
 df_no_gate <- data.frame(
   model = rep(c("CTMP_GIN", "no_gate"), each = 15),
   values = c(ctmp_gin_auc, no_gate_auc),
@@ -77,7 +87,7 @@ df_no_gate <- data.frame(
   r = rep(r_seq, times = 2)
 )
 
-# CTMP_GIN vs Ablation 데이터 - no_process (no missing value imputation)
+# CTMP_GIN vs Ablation - no_preprocessing
 df_no_preprocess <- data.frame(
   model = rep(c("CTMP_GIN", "no_preprocessing"), each = 15),
   values = c(ctmp_gin_auc, no_process_auc),
@@ -85,7 +95,7 @@ df_no_preprocess <- data.frame(
   r = rep(r_seq, times = 2)
 )
 
-# CTMP_GIN vs Ablation 데이터 - fully_connected_edge
+# CTMP_GIN vs Ablation - fully_connected_edge
 df_fully <- data.frame(
   model = rep(c("CTMP_GIN", "fully_connected_edge"), each = 15),
   values = c(ctmp_gin_auc, fully_auc),
@@ -93,101 +103,22 @@ df_fully <- data.frame(
   r = rep(r_seq, times = 2)
 )
 
-# CTMP_GIN vs CTMP_GIN_2 데이터
-df_ctmp_gin_2 <- data.frame(
-  model = rep(c("CTMP_GIN", "CTMP_GIN_2"), each = 15),
-  values = c(ctmp_gin_auc, ctmp_gin_auc_2),
+# [신규] CTMP_GIN vs GINGRU
+df_gingru <- data.frame(
+  model = rep(c("CTMP_GIN", "GINGRU"), each = 15),
+  values = c(ctmp_gin_auc, gingru_auc),
   k = rep(k_seq, times = 2),
   r = rep(r_seq, times = 2)
 )
 
-# CTMP_GIN_2 vs GIN 데이터
-df_gin_2 <- data.frame(
-  model = rep(c("CTMP_GIN_2", "GIN"), each = 15),
-  values = c(ctmp_gin_auc_2, gin_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
 
-# CTMP_GIN_2 vs A3TGCN 데이터
-df_a3tgcn_2 <- data.frame(
-  model = rep(c("CTMP_GIN_2", "A3TGCN"), each = 15),
-  values = c(ctmp_gin_auc_2, a3tgcn_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
+# ============================================================
+# [참고] 원본 코드에 있던 ctmp_gin_auc_2, ctmp_gin_auc_3 관련
+# 데이터프레임/검정은 CSV 파일에 해당 실험 결과가 없어
+# 정의가 불가능하므로 제외했습니다.
+# 추후 데이터가 추가되면 동일한 패턴으로 확장 가능합니다.
+# ============================================================
 
-# CTMP_GIN_2 vs Ablation - no_gate
-df_no_gate_2 <- data.frame(
-  model = rep(c("CTMP_GIN_2", "no_gate"), each = 15),
-  values = c(ctmp_gin_auc_2, no_gate_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
-
-# CTMP_GIN_2 vs Ablation - no_preprocessing
-df_no_preprocess_2 <- data.frame(
-  model = rep(c("CTMP_GIN_2", "no_preprocessing"), each = 15),
-  values = c(ctmp_gin_auc_2, no_process_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
-
-# CTMP_GIN_2 vs Ablation - fully_connected_edge
-df_fully_2 <- data.frame(
-  model = rep(c("CTMP_GIN_2", "fully_connected_edge"), each = 15),
-  values = c(ctmp_gin_auc_2, fully_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
-
-# CTMP_GIN vs CTMP_GIN_3 데이터
-df_ctmp_gin_3 <- data.frame(
-  model = rep(c("CTMP_GIN", "CTMP_GIN_3"), each = 15),
-  values = c(ctmp_gin_auc, ctmp_gin_auc_3),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
-
-# CTMP_GIN_3 vs GIN 데이터
-df_gin_3 <- data.frame(
-  model = rep(c("CTMP_GIN_3", "GIN"), each = 15),
-  values = c(ctmp_gin_auc_3, gin_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
-
-# CTMP_GIN_3 vs A3TGCN 데이터
-df_a3tgcn_3 <- data.frame(
-  model = rep(c("CTMP_GIN_3", "A3TGCN"), each = 15),
-  values = c(ctmp_gin_auc_3, a3tgcn_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
-
-# CTMP_GIN_3 vs Ablation - no_gate
-df_no_gate_3 <- data.frame(
-  model = rep(c("CTMP_GIN_3", "no_gate"), each = 15),
-  values = c(ctmp_gin_auc_3, no_gate_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
-
-# CTMP_GIN_3 vs Ablation - no_preprocessing
-df_no_preprocess_3 <- data.frame(
-  model = rep(c("CTMP_GIN_3", "no_preprocessing"), each = 15),
-  values = c(ctmp_gin_auc_3, no_process_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
-
-# CTMP_GIN_3 vs Ablation - fully_connected_edge
-df_fully_3 <- data.frame(
-  model = rep(c("CTMP_GIN_3", "fully_connected_edge"), each = 15),
-  values = c(ctmp_gin_auc_3, fully_auc),
-  k = rep(k_seq, times = 2),
-  r = rep(r_seq, times = 2)
-)
 
 # 4. 통계 검정 파라미터 설정 (TEDS 데이터셋 기준)
 n1 <- 948014  # Train 세트 사이즈
@@ -216,74 +147,6 @@ cat("\n=== CTMP_GIN vs Fully connected edge ===\n")
 res_fully <- repkfold_ttest(data = df_fully, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two")
 print(res_fully)
 
-cat("\n=== CTMP_GIN vs CTMP_GIN_2 ===\n")
-res_ctmp_gin_2 <- repkfold_ttest(data = df_ctmp_gin_2, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two")
-print(res_ctmp_gin_2)
-
-# 6. CTMP_GIN_2 기반 Repeated K-Fold Corrected T-Test 실행
-cat("=== CTMP_GIN_2 vs GIN ===\n")
-res_gin_2 <- repkfold_ttest(
-  data = df_gin_2, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_gin_2)
-
-cat("\n=== CTMP_GIN_2 vs A3TGCN ===\n")
-res_a3tgcn_2 <- repkfold_ttest(
-  data = df_a3tgcn_2, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_a3tgcn_2)
-
-cat("\n=== CTMP_GIN_2 vs Gated_Fusion removed ===\n")
-res_no_gate_2 <- repkfold_ttest(
-  data = df_no_gate_2, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_no_gate_2)
-
-cat("\n=== CTMP_GIN_2 vs Preprocessing method removed ===\n")
-res_no_preprocess_2 <- repkfold_ttest(
-  data = df_no_preprocess_2, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_no_preprocess_2)
-
-cat("\n=== CTMP_GIN_2 vs Fully connected edge ===\n")
-res_fully_2 <- repkfold_ttest(
-  data = df_fully_2, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_fully_2)
-
-# 7. CTMP_GIN_3 기반 Repeated K-Fold Corrected T-Test 실행
-cat("\n=== CTMP_GIN vs CTMP_GIN_3 ===\n")
-res_ctmp_gin_3 <- repkfold_ttest(
-  data = df_ctmp_gin_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_ctmp_gin_3)
-
-cat("\n=== CTMP_GIN_3 vs GIN ===\n")
-res_gin_3 <- repkfold_ttest(
-  data = df_gin_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_gin_3)
-
-cat("\n=== CTMP_GIN_3 vs A3TGCN ===\n")
-res_a3tgcn_3 <- repkfold_ttest(
-  data = df_a3tgcn_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_a3tgcn_3)
-
-cat("\n=== CTMP_GIN_3 vs Gated_Fusion removed ===\n")
-res_no_gate_3 <- repkfold_ttest(
-  data = df_no_gate_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_no_gate_3)
-
-cat("\n=== CTMP_GIN_3 vs Preprocessing method removed ===\n")
-res_no_preprocess_3 <- repkfold_ttest(
-  data = df_no_preprocess_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_no_preprocess_3)
-
-cat("\n=== CTMP_GIN_3 vs Fully connected edge ===\n")
-res_fully_3 <- repkfold_ttest(
-  data = df_fully_3, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two"
-)
-print(res_fully_3)
+cat("\n=== CTMP_GIN vs GINGRU ===\n")
+res_gingru <- repkfold_ttest(data = df_gingru, n1 = n1, n2 = n2, k = k_folds, r = r_repeats, tailed = "two")
+print(res_gingru)
