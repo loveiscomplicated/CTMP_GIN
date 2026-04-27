@@ -59,7 +59,7 @@ def suggest_ctmp_gin_params(trial, cfg):
     )
 
     cfg["train"]["batch_size"] = trial.suggest_categorical(
-        "batch_size", [128, 256, 512, 1024]
+        "batch_size", [32, 64, 128, 256, 512]
     )
     cfg["train"]["learning_rate"] = trial.suggest_float(
         "learning_rate", 1e-4, 3e-3, log=True
@@ -341,7 +341,9 @@ def objective_factory(
         for seed in objective_seeds:
             cfg_s = copy.deepcopy(cfg)
             cfg_s["train"]["seed"] = int(seed)
-            cfg_s["train"]["split_seed"] = SPLIT_SEED  # 모든 trial에서 동일한 split 보장
+            cfg_s["train"][
+                "split_seed"
+            ] = SPLIT_SEED  # 모든 trial에서 동일한 split 보장
             cfg_s["train"]["epochs"] = epochs  # --epochs 인자로 config 값 override
 
             try:
