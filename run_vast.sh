@@ -24,7 +24,7 @@ echo "seed      : ${SEED}"
 WORKSPACE_ROOT="/workspace"
 REPO_URL="https://github.com/loveiscomplicated/CTMP_GIN.git"
 REPO_DIR="${WORKSPACE_ROOT}/CTMP_GIN"
-BRANCH="vastai"
+BRANCH="main"
 
 CONDA_DIR="$HOME/miniconda3"
 CONDA_SH="${CONDA_DIR}/etc/profile.d/conda.sh"
