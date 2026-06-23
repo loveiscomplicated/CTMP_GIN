@@ -64,6 +64,7 @@ VAST_TERMINATE_SH="${REPO_DIR}/scripts/vast_terminate.sh"
 
 EPOCHS="${EPOCHS:-50}"
 TOTAL_TRIALS="${TOTAL_TRIALS:-50}"
+SPLIT_SEED="${SPLIT_SEED:-42}"
 
 notify() {
   local msg="$1"
@@ -92,6 +93,7 @@ MODEL_NAME="__MODEL_NAME__"
 CONFIG_PATH="__CONFIG_PATH__"
 EPOCHS="__EPOCHS__"
 TOTAL_TRIALS="__TOTAL_TRIALS__"
+SPLIT_SEED="__SPLIT_SEED__"
 RCLONE_B64_FILE="__RCLONE_B64_FILE__"
 
 WORKSPACE_ROOT="__WORKSPACE_ROOT__"
@@ -197,12 +199,12 @@ export MKL_NUM_THREADS=4
 
 # (E) Unique study name per (model, config) to avoid mixing
 CFG_BASENAME="$(basename "$CONFIG_PATH")"
-STUDY_NAME="${MODEL_NAME}__${CFG_BASENAME%.*}"
+STUDY_NAME="${MODEL_NAME}__${CFG_BASENAME%.*}__split${SPLIT_SEED}"
 
 # (F) Total trials control (set TOTAL_TRIALS via env var; default 50)
 WORKERS="${#GPU_IDS[@]}"
 PER_WORKER=$(( (TOTAL_TRIALS + WORKERS - 1) / WORKERS ))
-echo "[$(ts)] total_trials=$TOTAL_TRIALS workers=$WORKERS per_worker=$PER_WORKER study_name=$STUDY_NAME"
+echo "[$(ts)] total_trials=$TOTAL_TRIALS workers=$WORKERS per_worker=$PER_WORKER split_seed=$SPLIT_SEED study_name=$STUDY_NAME"
 
 # (G) Logs into runs for upload/debug
 LOG_DIR="${RUNS_DIR}/optuna_logs/${STUDY_NAME}"
@@ -229,6 +231,7 @@ echo "[$(ts)] initializing optuna study schema..."
 python -m src.trainers.run_parameter_search_optuna \
     --config "$CONFIG_PATH" \
     --study-name "$STUDY_NAME" \
+    --split-seed "$SPLIT_SEED" \
     --init-only
 
 # -----------------------
@@ -256,6 +259,7 @@ for i in "${!GPU_IDS[@]}"; do
     --study-name "$STUDY_NAME" \
     --n-trials "$PER_WORKER" \
     --epochs "$EPOCHS" \
+    --split-seed "$SPLIT_SEED" \
     > "${LOG_DIR}/worker_${i}.log" 2>&1 &
   pids+=("$!")
 done
@@ -410,6 +414,7 @@ PIPELINE="${PIPELINE//__SEND_MESSAGE_PY__/${SEND_MESSAGE_PY}}"
 PIPELINE="${PIPELINE//__VAST_TERMINATE_SH__/${VAST_TERMINATE_SH}}"
 PIPELINE="${PIPELINE//__EPOCHS__/${EPOCHS}}"
 PIPELINE="${PIPELINE//__TOTAL_TRIALS__/${TOTAL_TRIALS}}"
+PIPELINE="${PIPELINE//__SPLIT_SEED__/${SPLIT_SEED}}"
 PIPELINE="${PIPELINE//__CONTAINER_API_KEY__/${CONTAINER_API_KEY:-}}"
 PIPELINE="${PIPELINE//__VAST_INSTANCE_ID__/${VAST_INSTANCE_ID:-}}"
 

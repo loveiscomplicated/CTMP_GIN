@@ -20,6 +20,7 @@ def parse_args():
     p.add_argument("--study-name", type=str, default=None)
     p.add_argument("--n-trials", type=int, default=None)
     p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--split-seed", type=int, default=42)
     return p.parse_args()
 
 
@@ -322,10 +323,8 @@ def objective_factory(
     objective_seeds=(1,),
     bot_name="optuna_worker",
     epochs: int = 50,
+    split_seed: int = 42,
 ):
-    # split_seed: Optuna 전 trial에서 동일한 train/val/test split을 보장하는 고정 seed
-    SPLIT_SEED = 42
-
     def objective(trial: optuna.Trial):
         # trial별 고유 seed: model 초기화, dropout 등에만 적용 (split에는 무관)
         trial_seed = 10000 + trial.number
@@ -344,7 +343,7 @@ def objective_factory(
             cfg_s["train"]["seed"] = int(seed)
             cfg_s["train"][
                 "split_seed"
-            ] = SPLIT_SEED  # 모든 trial에서 동일한 split 보장
+            ] = int(split_seed)  # 모든 trial에서 동일한 split 보장
             cfg_s["train"]["epochs"] = epochs  # --epochs 인자로 config 값 override
 
             try:
@@ -404,6 +403,7 @@ def run_optuna(
     epochs: int = 50,
     study_name: Optional[str] = None,
     db="postgresql",
+    split_seed: int = 42,
 ):
 
     os.makedirs("runs", exist_ok=True)
@@ -445,10 +445,11 @@ def run_optuna(
         objective_seeds=(1,),
         bot_name=f"optuna_{study_name}_gpu{gpu_id}",
         epochs=epochs,
+        split_seed=split_seed,
     )
 
     print(
-        f"[Worker GPU={gpu_id}] study={study.study_name}  model={model_name}  n_trials={n_trials}"
+        f"[Worker GPU={gpu_id}] study={study.study_name}  model={model_name}  n_trials={n_trials}  split_seed={split_seed}"
     )
     study.optimize(
         objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True
@@ -510,6 +511,7 @@ if __name__ == "__main__":
                 epochs=args.epochs or 50,
                 study_name=args.study_name,
                 db=db,  # 파라미터 전달
+                split_seed=args.split_seed,
             )
     finally:
         if not args.init_only:
