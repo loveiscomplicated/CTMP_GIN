@@ -1,5 +1,6 @@
 import os
 import pickle
+import hashlib
 from copy import deepcopy
 from tqdm import tqdm
 import pandas as pd
@@ -7,21 +8,45 @@ from sklearn.feature_selection import mutual_info_classif
 from .data_utils import get_ad_dis_col
 
 def _remove_target(df: pd.DataFrame):
-    cols = set(df.columns)
-    if 'REASON' in cols:
-        cols.discard('REASON')
-    if 'REASONb' in cols:
-        cols.discard('REASONb')
-    return df[list(cols)].copy(deep=True)
+    cols = [col for col in df.columns if col not in {"REASON", "REASONb"}]
+    return df.loc[:, cols].copy(deep=True)
 
-def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int):
+def _train_df_fingerprint(df: pd.DataFrame) -> str:
+    """
+    Build a split-aware cache key from row indices and schema.
+
+    MI is computed from a train split. Using only seed/remove_los lets CV folds
+    accidentally reuse another fold's MI, so the cache key must include the
+    selected rows. Hashing row indices is enough for the deterministic processed
+    TEDS dataframe and is much cheaper than hashing every categorical value for
+    every HPO trial.
+    """
+    cols = [col for col in df.columns if col not in {"REASON", "REASONb"}]
+    h = hashlib.blake2b(digest_size=12)
+    h.update(str((len(df), len(cols))).encode("utf-8"))
+    h.update("\0".join(map(str, cols)).encode("utf-8"))
+    h.update(str(tuple(str(df[col].dtype) for col in cols)).encode("utf-8"))
+    index_hash = pd.util.hash_pandas_object(df.index.to_series(), index=False).values
+    h.update(index_hash.tobytes())
+    return h.hexdigest()
+
+def _mi_cache_path(root: str, seed: int, train_df: pd.DataFrame, remove_los: bool) -> str:
+    cache_key = _train_df_fingerprint(train_df)
+    return os.path.join(
+        root,
+        "mi",
+        f"mi_dict_seed_{seed}_remove_los_{remove_los}_split_{cache_key}.pickle",
+    )
+
+def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int | None = None):
     """
     Compute mutual information (MI) between each column and all remaining columns.
 
     Args:
         df (pd.DataFrame): Training DataFrame.
         seed (int): Random seed for MI estimation.
-        n_neighbors (int): Number of neighbors for MI estimation.
+        n_neighbors: Kept for backward compatibility. Ignored because all
+            features are treated as discrete.
 
     Returns:
         dict: Mapping {target_column: MI Series over remaining columns}.
@@ -30,12 +55,12 @@ def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int):
     for col in tqdm(df.columns):
         x = df.drop(col, axis=1)
         y = df[col]
-        mi = mutual_info_classif(x, y, discrete_features=True, n_neighbors=n_neighbors, random_state=seed)
+        mi = mutual_info_classif(x, y, discrete_features=True, random_state=seed)
         mi_series = pd.Series(mi, index=x.columns)
         mi_dict[col] = mi_series
     return mi_dict
 
-def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str | None, n_neighbors=3):
+def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str | None, n_neighbors=None):
     """
     Compute and save mutual information dictionary for all variables.
 
@@ -43,7 +68,7 @@ def get_mi_dict(train_df: pd.DataFrame, seed: int, mi_dict_path: str | None, n_n
         train_df (pd.DataFrame): Training DataFrame.
         seed (int): Random seed.
         mi_dict_path (str): Path to save the MI dictionary.
-        n_neighbors (int): Number of neighbors for MI estimation.
+        n_neighbors: Kept for backward compatibility. Ignored for discrete MI.
 
     Returns:
         dict: Mutual information dictionary.
@@ -148,7 +173,7 @@ def seperate_ad_dis(mi_dict: dict, ad_col_list, dis_col_list):
     return mi_ad_dict, mi_dis_dict, mi_avg_dict
 
 
-def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, remove_los=True, cache_path: str | None = None):
+def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=None, remove_los=True, cache_path: str | None = None):
     """
     Load cached MI results or compute them, then split by admission/discharge.
 
@@ -156,7 +181,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, 
         root (str): Root directory for MI cache.
         seed (int): Random seed.
         train_df (pd.DataFrame): Training DataFrame.
-        n_neighbors (int): Number of neighbors for MI estimation. 
+        n_neighbors: Kept for backward compatibility. Ignored for discrete MI.
         cache_path (None or str): if set to str, it searches the selected path priorly. 
                                   if None, it automatically searches by its seed.
 
@@ -178,7 +203,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, 
 
     # 2. If loading failed or cache_path was not provided, check the default path (seed-based)
     if mi_dict is None:
-        mi_dict_path = os.path.join(root, 'mi', f'mi_dict_seed_{seed}_n_neighbors_{n_neighbors}_remove_los_{remove_los}.pickle')
+        mi_dict_path = _mi_cache_path(root=root, seed=seed, train_df=train_df, remove_los=remove_los)
         
         if os.path.exists(mi_dict_path):
             print("Loading cached file...")
@@ -199,22 +224,27 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, 
     return mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict
 
 
-def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=3, remove_los=True):
+def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=None, remove_los=True):
     """
     calculate mi_dict every time.
     Args:
         root (str): Root directory for MI cache.
         seed (int): Random seed.
         train_df (pd.DataFrame): Training DataFrame.
-        n_neighbors (int): Number of neighbors for MI estimation. # NOTE: cv result of n_neighbors: 3
+        n_neighbors: Kept for backward compatibility. Ignored for discrete MI.
 
     Returns:
         tuple: (mi_ad_dict, mi_dis_dict, mi_avg_dict)
     """
     print("Buliding Mutual Information based edge index")
-    mi_dict_path = os.path.join(root, 'mi', f'mi_dict_seed_{seed}_n_neighbors_{n_neighbors}_remove_los_{remove_los}.pickle')
-    print("Calculating MI...")
-    mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors) 
+    mi_dict_path = _mi_cache_path(root=root, seed=seed, train_df=train_df, remove_los=remove_los)
+    if os.path.exists(mi_dict_path):
+        print("Loading cached file...")
+        with open(mi_dict_path, 'rb') as f:
+            mi_dict = pickle.load(f)
+    else:
+        print("Calculating MI...")
+        mi_dict = get_mi_dict(train_df=train_df, seed=seed, mi_dict_path=mi_dict_path, n_neighbors=n_neighbors)
 
     ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=remove_los)
     mi_ad_dict, mi_dis_dict, mi_avg_dict = seperate_ad_dis(mi_dict=mi_dict, ad_col_list=ad_col_list, dis_col_list=dis_col_list)

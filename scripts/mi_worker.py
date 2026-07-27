@@ -52,7 +52,7 @@ def rclone_list(remote_path):
     return result.stdout.splitlines()
 
 
-def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int):
+def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int | None = None):
     mi_dict = {}
     for col in tqdm(df.columns):
         x = df.drop(col, axis=1)
@@ -61,7 +61,6 @@ def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int):
             x,
             y,
             discrete_features=True,
-            n_neighbors=n_neighbors,
             random_state=seed
         )
         mi_series = pd.Series(mi, index=x.columns)
@@ -165,7 +164,7 @@ def process_one_request_file(fname: str):
         mi_dict = _get_mi_helper(
             train_df,
             req["seed"],
-            req["n_neighbors"],
+            req.get("n_neighbors"),
         )
 
         # 계산 결과를 로컬 캐시에 저장 (다음 번에 use_cache=True인 요청이 오면 활용됨)

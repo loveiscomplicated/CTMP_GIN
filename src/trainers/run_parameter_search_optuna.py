@@ -50,7 +50,6 @@ def suggest_ctmp_gin_params(trial, cfg):
         "gate_hidden_ch", [None, 64, 128, 256]
     )
 
-    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
     cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
     cfg["edge"]["threshold"] = trial.suggest_categorical(
         "threshold", [0.0, 0.005, 0.01, 0.02]
@@ -89,7 +88,6 @@ def suggest_gin_params(trial, cfg):
         "train_eps", [True, False]
     )
 
-    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
     cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
     cfg["edge"]["threshold"] = trial.suggest_categorical(
         "threshold", [0.0, 0.005, 0.01, 0.02]
@@ -122,7 +120,6 @@ def suggest_a3tgcn_params(trial, cfg):
         "hidden_channel", [16, 32, 64, 96]
     )
 
-    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
     cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
     cfg["edge"]["threshold"] = trial.suggest_categorical(
         "threshold", [0.0, 0.005, 0.01, 0.02]
@@ -155,7 +152,6 @@ def suggest_a3tgcn_2_points_params(trial, cfg):
         "hidden_channel", [16, 32, 64, 96]
     )
 
-    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
     cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
     cfg["edge"]["threshold"] = trial.suggest_categorical(
         "threshold", [0.0, 0.005, 0.01, 0.02]
@@ -197,7 +193,6 @@ def suggest_gin_gru_params(trial, cfg):
     )
     cfg["model"]["params"]["dropout_p"] = trial.suggest_float("dropout_p", 0.0, 0.5)
 
-    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
     cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
     cfg["edge"]["threshold"] = trial.suggest_categorical(
         "threshold", [0.0, 0.005, 0.01, 0.02]
@@ -245,7 +240,6 @@ def suggest_gin_gru_2_points_params(trial, cfg):
         "gru_layer_out_dropout_p", 0.0, 0.5
     )
 
-    cfg["edge"]["n_neighbors"] = trial.suggest_categorical("n_neighbors", [1, 3, 5, 7])
     cfg["edge"]["top_k"] = trial.suggest_categorical("top_k", [3, 6, 9, 12])
     cfg["edge"]["threshold"] = trial.suggest_categorical(
         "threshold", [0.0, 0.005, 0.01, 0.02]
@@ -347,15 +341,13 @@ def objective_factory(
             cfg_s["train"]["epochs"] = epochs  # --epochs 인자로 config 값 override
 
             try:
-                print(
-                    f"[Trial {trial.number}] requesting MI (seed={seed}, n_neighbors={cfg_s['edge']['n_neighbors']})..."
-                )
+                print(f"[Trial {trial.number}] requesting MI (seed={seed})...")
                 mi_edge_path = request_mi(
                     mode="single",
                     fold=None,
                     seed=seed,
                     cfg=cfg_s,
-                    n_neighbors=cfg_s["edge"]["n_neighbors"],
+                    n_neighbors=cfg_s["edge"].get("n_neighbors", 3),
                     verbose_poll=True,
                 )
                 out = run_single_experiment(

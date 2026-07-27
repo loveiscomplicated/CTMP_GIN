@@ -86,8 +86,8 @@ def mi_edge_index_single(
         # [Strategy 2] Threshold 적용 (너무 약한 관계 끊기)
         series = series[series >= threshold]
 
-        # Top-k 선택
-        top_neighbors = series.head(top_k)
+        # Top-k 선택: MI 값 기준 내림차순이어야 실제 top-k가 된다.
+        top_neighbors = series.sort_values(ascending=False).head(top_k)
 
         src_idx = col_to_idx[src]
         for dst, w in top_neighbors.items():

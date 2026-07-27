@@ -93,13 +93,21 @@ def _run(cmd: list[str], *, allow_rate_limit_retry: bool = True) -> str:
             ) from e
 
 
-def _artifact_key(mode: str, fold: int | None, seed: int, n_neighbors: int, remove_los: bool=True) -> str:
+def _artifact_key(mode: str, fold: int | None, seed: int, cfg: dict, remove_los: bool=True) -> str:
+    train_cfg = cfg.get("train", {})
+    split_seed = train_cfg.get("split_seed", seed)
+    split_sig = (
+        f"split_seed={split_seed}"
+        f"__ratio={train_cfg.get('train_ratio', 'na')}-"
+        f"{train_cfg.get('val_ratio', 'na')}-"
+        f"{train_cfg.get('test_ratio', 'na')}"
+    )
     if mode == "cv":
         if fold is None:
             raise ValueError("mode=cv requires fold")
-        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__n_neighbors={n_neighbors}__remove_los={remove_los}"
+        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__{split_sig}__remove_los={remove_los}"
     if mode == "single":
-        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__n_neighbors={n_neighbors}__remove_los={remove_los}"
+        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__{split_sig}__remove_los={remove_los}"
     raise ValueError("mode must be 'cv' or 'single'")
 
 
@@ -184,7 +192,8 @@ def request_mi(
         fold: required if mode=="cv"
         seed: random seed
         cfg: config payload (should be JSON-serializable)
-        n_neighbors: MI estimator neighbors
+        n_neighbors: Kept for backward compatibility. Ignored by the worker
+            because MI is computed with discrete_features=True.
         poll_interval_sec: seconds between polls
         timeout_sec: None for no timeout
         serialize_cfg_default_str: if True, json.dumps(..., default=str) to avoid non-serializable objects
@@ -202,7 +211,7 @@ def request_mi(
     if model_name in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]:
         remove_los = False
 
-    artifact_key = _artifact_key(mode, fold, seed, n_neighbors, remove_los)
+    artifact_key = _artifact_key(mode, fold, seed, cfg, remove_los)
     local_pkl = LOCAL_CACHE_DIR / f"{artifact_key}.pkl"
 
     # 1) local cache hit
