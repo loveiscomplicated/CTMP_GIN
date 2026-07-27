@@ -120,7 +120,8 @@ class A3TGCN2(torch.nn.Module):
         device: torch.device = torch.device("cpu"),
         improved: bool = False,
         cached: bool = False,
-        add_self_loops: bool = True):
+        add_self_loops: bool = True,
+        fuse_gates: bool = False):
         super(A3TGCN2, self).__init__()
 
         self.in_channels = in_channels  # 2
@@ -129,6 +130,7 @@ class A3TGCN2(torch.nn.Module):
         self.improved = improved
         self.cached = cached
         self.add_self_loops = add_self_loops
+        self.fuse_gates = bool(fuse_gates)
         self.batch_size = batch_size
         self.device = device
         self._setup_layers()
@@ -140,7 +142,8 @@ class A3TGCN2(torch.nn.Module):
             batch_size=self.batch_size,
             improved=self.improved,
             cached=self.cached, 
-            add_self_loops=self.add_self_loops)
+            add_self_loops=self.add_self_loops,
+            fuse_gates=self.fuse_gates)
 
         self._attention = torch.nn.Parameter(torch.empty(self.periods, device=self.device))
         torch.nn.init.uniform_(self._attention)

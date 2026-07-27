@@ -147,7 +147,8 @@ class TGCN2(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, 
                  batch_size: int,  # this entry is unnecessary, kept only for backward compatibility
                  improved: bool = False, cached: bool = False, 
-                 add_self_loops: bool = True):
+                 add_self_loops: bool = True,
+                 fuse_gates: bool = False):
         super(TGCN2, self).__init__()
 
         self.in_channels = in_channels
@@ -156,6 +157,7 @@ class TGCN2(torch.nn.Module):
         self.cached = cached
         self.add_self_loops = add_self_loops
         self.batch_size = batch_size  # not needed
+        self.fuse_gates = bool(fuse_gates)
         self._create_parameters_and_layers()
 
     def _create_update_gate_parameters_and_layers(self):
@@ -174,6 +176,14 @@ class TGCN2(torch.nn.Module):
         self.linear_h = torch.nn.Linear(2 * self.out_channels, self.out_channels)
 
     def _create_parameters_and_layers(self):
+        if self.fuse_gates:
+            self.conv_gates = GCNConv(in_channels=self.in_channels, out_channels=3 * self.out_channels,
+                                      improved=self.improved, cached=self.cached,
+                                      add_self_loops=self.add_self_loops)
+            self.linear_z = torch.nn.Linear(2 * self.out_channels, self.out_channels)
+            self.linear_r = torch.nn.Linear(2 * self.out_channels, self.out_channels)
+            self.linear_h = torch.nn.Linear(2 * self.out_channels, self.out_channels)
+            return
         self._create_update_gate_parameters_and_layers()
         self._create_reset_gate_parameters_and_layers()
         self._create_candidate_state_parameters_and_layers()
@@ -181,7 +191,7 @@ class TGCN2(torch.nn.Module):
     def _set_hidden_state(self, X, H):
         if H is None:
             # can infer batch_size from X.shape, because X is [B, N, F]
-            H = torch.zeros(X.shape[0], X.shape[1], self.out_channels).to(X.device) #(b, 207, 32)
+            H = X.new_zeros(X.shape[0], X.shape[1], self.out_channels) #(b, 207, 32)
         return H
 
     def _calculate_update_gate(self, X, edge_index, edge_weight, H):
@@ -205,6 +215,13 @@ class TGCN2(torch.nn.Module):
 
         return H_tilde
 
+    def _calculate_fused_gates(self, X, edge_index, edge_weight, H):
+        conv_z, conv_r, conv_h = self.conv_gates(X, edge_index, edge_weight).split(self.out_channels, dim=2)
+        Z = torch.sigmoid(self.linear_z(torch.cat([conv_z, H], axis=2)))
+        R = torch.sigmoid(self.linear_r(torch.cat([conv_r, H], axis=2)))
+        H_tilde = torch.tanh(self.linear_h(torch.cat([conv_h, H * R], axis=2)))
+        return Z, H_tilde
+
     def _calculate_hidden_state(self, Z, H, H_tilde):
         H = Z * H + (1 - Z) * H_tilde   # # (b, 207, 32)
         return H
@@ -226,8 +243,39 @@ class TGCN2(torch.nn.Module):
             * **H** *(PyTorch Float Tensor)* - Hidden state matrix for all nodes.
         """
         H = self._set_hidden_state(X, H)
-        Z = self._calculate_update_gate(X, edge_index, edge_weight, H)
-        R = self._calculate_reset_gate(X, edge_index, edge_weight, H)
-        H_tilde = self._calculate_candidate_state(X, edge_index, edge_weight, H, R)
+        if self.fuse_gates:
+            Z, H_tilde = self._calculate_fused_gates(X, edge_index, edge_weight, H)
+        else:
+            Z = self._calculate_update_gate(X, edge_index, edge_weight, H)
+            R = self._calculate_reset_gate(X, edge_index, edge_weight, H)
+            H_tilde = self._calculate_candidate_state(X, edge_index, edge_weight, H, R)
         H = self._calculate_hidden_state(Z, H, H_tilde) # (b, 207, 32)
         return H
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        if self.fuse_gates and prefix + "conv_gates.lin.weight" not in state_dict:
+            legacy_weight_keys = [
+                prefix + "conv_z.lin.weight",
+                prefix + "conv_r.lin.weight",
+                prefix + "conv_h.lin.weight",
+            ]
+            legacy_bias_keys = [
+                prefix + "conv_z.bias",
+                prefix + "conv_r.bias",
+                prefix + "conv_h.bias",
+            ]
+            if all(key in state_dict for key in legacy_weight_keys):
+                state_dict[prefix + "conv_gates.lin.weight"] = torch.cat(
+                    [state_dict.pop(key) for key in legacy_weight_keys],
+                    dim=0,
+                )
+            if all(key in state_dict for key in legacy_bias_keys):
+                state_dict[prefix + "conv_gates.bias"] = torch.cat(
+                    [state_dict.pop(key) for key in legacy_bias_keys],
+                    dim=0,
+                )
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs,
+        )

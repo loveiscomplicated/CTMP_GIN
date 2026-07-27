@@ -85,7 +85,8 @@ class A3TGCN_2_points(nn.Module):
                         periods=2,
                         batch_size=batch_size,
                         device=device,
-                        cached=cached)
+                        cached=cached,
+                        fuse_gates=kwargs.get("fuse_gates", True))
 
         # 분류기 레이어 정의
         out_dim = 1 if self.num_classes == 2 else self.num_classes
