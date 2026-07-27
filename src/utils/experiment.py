@@ -97,7 +97,7 @@ def append_jsonl(path: str, record: Dict[str, Any]) -> None:
 @dataclass
 class CheckpointPolicy:
     save_ckpt: bool = True
-    save_every: int = 1          # save every N epochs (0 or <0 disables periodic saving)
+    save_every: int = 0          # save every N epochs (0 or <0 disables periodic saving)
     save_best: bool = True       # save best checkpoint
     monitor: str = "valid_auc"   # metric name to monitor
     mode: str = "max"            # "min" for loss, "max" for auc/f1
@@ -120,7 +120,7 @@ class ExperimentLogger:
         train_cfg = cfg.get("train", {})
         self.policy = CheckpointPolicy(
             save_ckpt=bool(train_cfg.get("save_ckpt", True)),
-            save_every=int(train_cfg.get("save_every", 1)),
+            save_every=int(train_cfg.get("save_every", 0)),
             save_best=bool(train_cfg.get("save_best", True)),
             monitor=str(train_cfg.get("monitor_metric", train_cfg.get("monitor", "valid_auc"))),
             mode=str(train_cfg.get("monitor_mode", train_cfg.get("mode", "max"))).lower(),

@@ -7,6 +7,7 @@ from typing import Iterator, Tuple, Optional
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
+from .data_utils import _loader_runtime_kwargs
 
 try:
     # sklearn is the most reliable for stratified splitting
@@ -132,7 +133,10 @@ def make_loaders(dataset,
                  test_idx, 
                  batch_size, 
                  num_workers, 
-                 drop_last=True):
+                 drop_last=False,
+                 pin_memory=False,
+                 persistent_workers=None,
+                 prefetch_factor=None):
     
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
@@ -142,14 +146,20 @@ def make_loaders(dataset,
     print(f"Valid Set Size: {len(val_dataset)}")
     print(f"Test Set Size: {len(test_dataset)}")
 
-    # val/test must use drop_last=True regardless of the parameter:
-    # edge_index is built with a fixed batch_size, so a short last-batch
-    # would cause an out-of-range node index error at inference time.
+    loader_kwargs = _loader_runtime_kwargs(
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
+    )
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size,
-                                  shuffle=True, num_workers=num_workers, drop_last=drop_last)
+                                  shuffle=True, drop_last=drop_last,
+                                  **loader_kwargs)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size,
-                                shuffle=False, num_workers=num_workers, drop_last=True)
+                                shuffle=False, drop_last=drop_last,
+                                **loader_kwargs)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size,
-                                 shuffle=False, num_workers=num_workers, drop_last=True)
+                                 shuffle=False, drop_last=drop_last,
+                                 **loader_kwargs)
     
     return train_dataloader, val_dataloader, test_dataloader

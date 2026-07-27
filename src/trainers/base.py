@@ -30,36 +30,50 @@ def train(
     edge_index,
     binary,
     device,
+    scaler=None,
+    amp_enabled=False,
+    disable_tqdm=False,
 ):
     model.train()
-    running_loss = 0.0
-    for batch in tqdm(dataloader, desc="train_process", leave=False):
+    running_loss = torch.zeros((), device=device)
+    total_samples = 0
+    non_blocking = device.type == "cuda"
+    iterator = tqdm(dataloader, desc="train_process", leave=False, disable=disable_tqdm)
+    for batch in iterator:
         x_batch, y_batch, los_batch = batch
-        x_batch = x_batch.to(device, non_blocking=True)
-        y_batch = y_batch.to(device, non_blocking=True)
-        los_batch = los_batch.to(device, non_blocking=True)
+        x_batch = x_batch.to(device, non_blocking=non_blocking)
+        y_batch = y_batch.to(device, non_blocking=non_blocking)
+        los_batch = los_batch.to(device, non_blocking=non_blocking)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
-        logits = model(
-            x_batch,
-            los_batch,
-            edge_index,
-            device=device,
-        )
-        if binary: 
-            logits = logits.squeeze(1)
-            loss = criterion(logits, y_batch.float())
+        with torch.amp.autocast("cuda", enabled=amp_enabled):
+            logits = model(
+                x_batch,
+                los_batch,
+                edge_index,
+                device=device,
+            )
+            if binary:
+                logits = logits.squeeze(1)
+                loss = criterion(logits, y_batch.float())
+            else:
+                loss = criterion(logits, y_batch.long())
+
+        if scaler is not None and amp_enabled:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         else:
-            loss = criterion(logits, y_batch.long())
+            loss.backward()
+            optimizer.step()
 
-        loss.backward()
-        optimizer.step()
+        batch_size = x_batch.size(0)
+        running_loss += loss.detach() * batch_size
+        total_samples += batch_size
 
-        running_loss += loss.item() * x_batch.size(0)
-
-    epoch_loss = running_loss / len(dataloader.dataset)
-    return epoch_loss
+    epoch_loss = running_loss / max(total_samples, 1)
+    return float(epoch_loss.detach().cpu().item())
 
 
 def evaluate(
@@ -71,66 +85,71 @@ def evaluate(
     binary,
     edge_index,
     num_classes: int | None = None,   # multiclass일 때만 필요 (없으면 자동 추정 시도)
+    amp_enabled=False,
+    disable_tqdm=False,
 ):
     model.eval()
-    running_loss = 0.0
-    total_correct = 0
+    running_loss = torch.zeros((), device=device)
+    total_correct = torch.zeros((), device=device, dtype=torch.long)
     total_samples = 0
 
     all_targets = []
     all_predictions = []
     all_scores = []  # binary: (N,), multiclass: (N, K)
+    non_blocking = device.type == "cuda"
 
-    with torch.no_grad():
-        for batch in tqdm(val_dataloader, desc="eval_process", leave=False):
+    with torch.inference_mode():
+        iterator = tqdm(val_dataloader, desc="eval_process", leave=False, disable=disable_tqdm)
+        for batch in iterator:
             x_batch, y_batch, los_batch = batch
-            x_batch = x_batch.to(device, non_blocking=True)
-            y_batch = y_batch.to(device, non_blocking=True)
-            los_batch = los_batch.to(device, non_blocking=True)
+            x_batch = x_batch.to(device, non_blocking=non_blocking)
+            y_batch = y_batch.to(device, non_blocking=non_blocking)
+            los_batch = los_batch.to(device, non_blocking=non_blocking)
 
-            logits = model(x_batch, 
-                           los_batch, 
-                           edge_index, 
-                           device=device)
+            with torch.amp.autocast("cuda", enabled=amp_enabled):
+                logits = model(x_batch,
+                               los_batch,
+                               edge_index,
+                               device=device)
 
-            if binary:
-                # logits: [B, 1] or [B]
-                if logits.ndim == 2 and logits.size(1) == 1:
-                    logits_1d = logits.squeeze(1)   # [B]
+                if binary:
+                    # logits: [B, 1] or [B]
+                    if logits.ndim == 2 and logits.size(1) == 1:
+                        logits_1d = logits.squeeze(1)   # [B]
+                    else:
+                        logits_1d = logits              # [B]
+
+                    loss = criterion(logits_1d, y_batch.float())
+
+                    scores = torch.sigmoid(logits_1d)  # [B]
+                    predicted = (scores >= decision_threshold).long()  # [B]
+
+                    all_scores.append(scores.detach())  # (B,)
+
                 else:
-                    logits_1d = logits              # [B]
+                    # multiclass logits: [B, K]
+                    # y_batch must be int class indices: [B]
+                    loss = criterion(logits, y_batch.long())
 
-                loss = criterion(logits_1d, y_batch.float())
+                    probs = F.softmax(logits, dim=1)         # [B, K]
+                    predicted = torch.argmax(probs, dim=1)   # [B]
 
-                scores = torch.sigmoid(logits_1d)  # [B]
-                predicted = (scores >= decision_threshold).long()  # [B]
+                    all_scores.append(probs.detach())   # (B, K)
 
-                all_scores.append(scores.detach().cpu().numpy())  # (B,)
+            running_loss += loss.detach() * x_batch.size(0)
 
-            else:
-                # multiclass logits: [B, K]
-                # y_batch must be int class indices: [B]
-                loss = criterion(logits, y_batch.long())
+            all_targets.append(y_batch.detach())
+            all_predictions.append(predicted.detach())
 
-                probs = F.softmax(logits, dim=1)         # [B, K]
-                predicted = torch.argmax(probs, dim=1)   # [B]
-
-                all_scores.append(probs.detach().cpu().numpy())   # (B, K)
-
-            running_loss += loss.item() * x_batch.size(0)
-
-            all_targets.append(y_batch.detach().cpu().numpy())
-            all_predictions.append(predicted.detach().cpu().numpy())
-
-            total_correct += (predicted == y_batch).sum().item()
+            total_correct += (predicted == y_batch).sum()
             total_samples += y_batch.size(0)
 
-    all_targets = np.concatenate(all_targets)         # (N,)
-    all_predictions = np.concatenate(all_predictions) # (N,)
-    all_scores = np.concatenate(all_scores)           # binary: (N,), multiclass: (N, K)
+    all_targets = torch.cat(all_targets).cpu().numpy()         # (N,)
+    all_predictions = torch.cat(all_predictions).cpu().numpy() # (N,)
+    all_scores = torch.cat(all_scores).cpu().numpy()           # binary: (N,), multiclass: (N, K)
 
-    epoch_loss = running_loss / len(val_dataloader.dataset)
-    epoch_accuracy = total_correct / total_samples
+    epoch_loss = float((running_loss / max(total_samples, 1)).detach().cpu().item())
+    epoch_accuracy = float((total_correct.float() / max(total_samples, 1)).detach().cpu().item())
 
     # precision/recall/f1
     # binary도 macro 써도 되긴 하지만, binary면 average='binary'가 더 직관적일 때가 많음
@@ -227,6 +246,17 @@ def run_train_loop(
     decision_threshold = kwargs["decision_threshold"]
     MODEL_NAME = kwargs.get("model_name", "Unknown")
     checkpoint_extra = kwargs.get("checkpoint_extra")
+    amp_enabled = bool(kwargs.get("amp", False)) and device.type == "cuda"
+    tf32_enabled = bool(kwargs.get("tf32", device.type == "cuda")) and device.type == "cuda"
+    disable_tqdm = bool(kwargs.get("disable_tqdm", False))
+
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = tf32_enabled
+        torch.backends.cudnn.allow_tf32 = tf32_enabled
+        if tf32_enabled:
+            torch.set_float32_matmul_precision("high")
+
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled) if device.type == "cuda" else None
 
     best_val = -float("inf")
     best_epoch = None
@@ -246,15 +276,17 @@ def run_train_loop(
 
     last_epoch = start_epoch - 1  # 루프가 0번 돌 때 대비
 
-    for epoch in tqdm(range(start_epoch, EPOCHS + 1)):
+    for epoch in tqdm(range(start_epoch, EPOCHS + 1), disable=disable_tqdm):
         last_epoch = epoch
 
         train_loss = train(
             model, train_dataloader, criterion, optimizer, edge_index, binary, device,
+            scaler=scaler, amp_enabled=amp_enabled, disable_tqdm=disable_tqdm,
         )
 
         val_loss, val_accuracy, val_precision, val_recall, val_f1, val_auc = evaluate(
             model, val_dataloader, criterion, decision_threshold, device, binary, edge_index,
+            amp_enabled=amp_enabled, disable_tqdm=disable_tqdm,
         )
 
         if scheduler is not None:
@@ -339,6 +371,7 @@ def run_train_loop(
         with torch.no_grad():
             test_loss, test_accuracy, test_precision, test_recall, test_f1, test_auc = evaluate(
                 model, test_dataloader, criterion, decision_threshold, device, binary, edge_index,
+                amp_enabled=amp_enabled, disable_tqdm=disable_tqdm,
             )
 
         result_str = f"\n[Test] Model: {MODEL_NAME} Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}"

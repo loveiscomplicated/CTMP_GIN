@@ -245,6 +245,8 @@ def run_single_fold(
         train_idx = np.asarray(fold_split["train_idx"], dtype=np.int64)
         val_idx = np.asarray(fold_split["val_idx"], dtype=np.int64)
         test_idx = np.asarray(splits["test_idx"], dtype=np.int64)
+        requires_fixed_batch_edge = fold_cfg["model"]["name"] in ["gin_gru"]
+        drop_last = bool(fold_cfg["train"].get("drop_last", requires_fixed_batch_edge))
         train_loader, val_loader, test_loader = make_loaders(
             dataset=dataset,
             train_idx=train_idx,
@@ -252,7 +254,10 @@ def run_single_fold(
             test_idx=test_idx,
             batch_size=fold_cfg["train"]["batch_size"],
             num_workers=fold_cfg["train"]["num_workers"],
-            drop_last=True,
+            drop_last=drop_last,
+            pin_memory=bool(fold_cfg["train"].get("pin_memory", device.type == "cuda")),
+            persistent_workers=fold_cfg["train"].get("persistent_workers", None),
+            prefetch_factor=fold_cfg["train"].get("prefetch_factor", None),
         )
 
         if fold_cfg["model"]["name"] == "xgboost":
@@ -306,29 +311,34 @@ def run_single_fold(
         if hasattr(model, "precompute_edge_index_2"):
             model.precompute_edge_index_2(edge_index, fold_cfg["train"]["batch_size"])
 
+        if bool(fold_cfg["train"].get("compile", False)) and device.type == "cuda":
+            compile_mode = fold_cfg["train"].get("compile_mode", "default")
+            model = torch.compile(model, mode=compile_mode)
+
         edge_index_save_path = os.path.join(fold_dir, "edge_index.pt")
         torch.save(edge_index.cpu(), edge_index_save_path)
         print(f"edge_index saved: {edge_index_save_path}")
-        print(f"edge index: \n{edge_index}")
-        print(f"edge index shape: \n{edge_index.shape}")
+        print(f"edge index shape: {tuple(edge_index.shape)}")
+        print(f"edge count: {edge_index.size(1):,}")
 
         if fold_cfg["train"]["binary"]:
             criterion = nn.BCEWithLogitsLoss()
         else:
             criterion = nn.CrossEntropyLoss()
 
-        if fold_cfg["train"].get("optimizer", "adam") == "adamw":
-            optimizer = torch.optim.AdamW(
-                model.parameters(),
-                lr=fold_cfg["train"]["learning_rate"],
-                weight_decay=fold_cfg["train"].get("weight_decay", 0.0),
-            )
-        else:
-            optimizer = torch.optim.Adam(
-                model.parameters(),
-                lr=fold_cfg["train"]["learning_rate"],
-                weight_decay=fold_cfg["train"].get("weight_decay", 0.0),
-            )
+        optimizer_name = fold_cfg["train"].get("optimizer", "adam")
+        optimizer_cls = torch.optim.AdamW if optimizer_name == "adamw" else torch.optim.Adam
+        optimizer_kwargs = {
+            "lr": fold_cfg["train"]["learning_rate"],
+            "weight_decay": fold_cfg["train"].get("weight_decay", 0.0),
+        }
+        if device.type == "cuda" and bool(fold_cfg["train"].get("fused_optimizer", True)):
+            optimizer_kwargs["fused"] = True
+        try:
+            optimizer = optimizer_cls(model.parameters(), **optimizer_kwargs)
+        except (TypeError, RuntimeError):
+            optimizer_kwargs.pop("fused", None)
+            optimizer = optimizer_cls(model.parameters(), **optimizer_kwargs)
 
         scheduler = ReduceLROnPlateau(
             optimizer,
@@ -355,6 +365,9 @@ def run_single_fold(
             decision_threshold=fold_cfg["train"]["decision_threshold"],
             model_name=fold_cfg["model"].get("name", "Unknown"),
             trial=None,
+            amp=fold_cfg["train"].get("amp", device.type == "cuda"),
+            tf32=fold_cfg["train"].get("tf32", device.type == "cuda"),
+            disable_tqdm=fold_cfg["train"].get("disable_tqdm", False),
         )
 
         results["fold"] = fold

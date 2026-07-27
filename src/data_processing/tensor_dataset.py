@@ -105,6 +105,16 @@ class TEDSTensorDataset(Dataset):
         self.raw_row_index = bundle.raw_row_index.reset_index(drop=True)
         self.caseid_series = None if bundle.caseid_series is None else bundle.caseid_series.reset_index(drop=True)
         los_tensor = bundle.los_encoded_tensor if not self.remove_los else bundle.los_raw_tensor
+        if los_tensor.numel() > 0:
+            los_min = int(los_tensor.min().item())
+            los_max = int(los_tensor.max().item())
+            los_low = 1 if self.remove_los else 0
+            los_high = 37 if self.remove_los else bundle.los_num_classes - 1
+            if los_min < los_low or los_max > los_high:
+                raise ValueError(
+                    f"LOS out of supported range: min={los_min} max={los_max} "
+                    f"valid=[{los_low}, {los_high}]"
+                )
         df_tensor = torch.cat([bundle.x_tensor, bundle.y_tensor], dim=1)
         return df_tensor, bundle.col_info, los_tensor
 

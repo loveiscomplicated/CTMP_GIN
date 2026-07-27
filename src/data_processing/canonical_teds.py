@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import json
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +12,9 @@ import torch
 
 from src.data_processing.data_utils import df_to_tensor, get_col_info, make_binary, organize_labels
 from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
+
+
+CANONICAL_TEDS_CACHE_VERSION = "canonical_teds_v2"
 
 
 @dataclass
@@ -49,6 +54,63 @@ class CanonicalTEDSBundle:
         }
 
 
+def _file_signature(path: str) -> dict[str, Any]:
+    if not os.path.exists(path):
+        return {"path": os.path.abspath(path), "exists": False}
+    stat = os.stat(path)
+    return {
+        "path": os.path.abspath(path),
+        "exists": True,
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def _cache_path(
+    root: str,
+    *,
+    binary: bool,
+    ig_label: bool,
+    remove_los: bool,
+    do_preprocess: bool,
+    admission_only: bool,
+) -> str:
+    raw_data_path = os.path.join(root, "raw", "TEDS_Discharge.csv")
+    missing_corrected_path = os.path.join(root, "raw", "missing_corrected.csv")
+    source_path = missing_corrected_path if do_preprocess and os.path.exists(missing_corrected_path) else raw_data_path
+    payload = {
+        "version": CANONICAL_TEDS_CACHE_VERSION,
+        "binary": bool(binary),
+        "ig_label": bool(ig_label),
+        "remove_los": bool(remove_los),
+        "do_preprocess": bool(do_preprocess),
+        "admission_only": bool(admission_only),
+        "source": _file_signature(source_path),
+    }
+    key = hashlib.blake2b(json.dumps(payload, sort_keys=True).encode("utf-8"), digest_size=12).hexdigest()
+    cache_dir = os.path.join(root, "processed_cache")
+    return os.path.join(cache_dir, f"{CANONICAL_TEDS_CACHE_VERSION}_{key}.pt")
+
+
+def _load_bundle_cache(cache_path: str) -> CanonicalTEDSBundle | None:
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        return torch.load(cache_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(cache_path, map_location="cpu")
+    except Exception as exc:
+        print(f"Warning: failed to load dataset cache {cache_path}: {exc}")
+        return None
+
+
+def _save_bundle_cache(cache_path: str, bundle: CanonicalTEDSBundle) -> None:
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    tmp_path = f"{cache_path}.{os.getpid()}.tmp"
+    torch.save(bundle, tmp_path)
+    os.replace(tmp_path, cache_path)
+
+
 def build_canonical_teds_bundle(
     root: str,
     *,
@@ -58,6 +120,18 @@ def build_canonical_teds_bundle(
     do_preprocess: bool = False,
     admission_only: bool = False,
 ) -> CanonicalTEDSBundle:
+    cache_path = _cache_path(
+        root,
+        binary=binary,
+        ig_label=ig_label,
+        remove_los=remove_los,
+        do_preprocess=do_preprocess,
+        admission_only=admission_only,
+    )
+    cached = _load_bundle_cache(cache_path)
+    if cached is not None:
+        return cached
+
     raw_data_path = os.path.join(root, "raw", "TEDS_Discharge.csv")
     missing_corrected_path = os.path.join(root, "raw", "missing_corrected.csv")
 
@@ -128,7 +202,7 @@ def build_canonical_teds_bundle(
     discharge_target_col_dims = [int(encoded_feature_df[c].nunique()) for c in discharge_target_col_names]
     los_num_classes = int(encoded_full_df["LOS"].nunique())
 
-    return CanonicalTEDSBundle(
+    bundle = CanonicalTEDSBundle(
         processed_df=processed_df,
         encoded_feature_df=encoded_feature_df,
         x_tensor=x_tensor,
@@ -146,3 +220,5 @@ def build_canonical_teds_bundle(
         raw_row_index=raw_row_index,
         caseid_series=caseid_series,
     )
+    _save_bundle_cache(cache_path, bundle)
+    return bundle

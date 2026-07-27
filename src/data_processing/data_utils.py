@@ -3,6 +3,22 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Subset
 
+def _loader_runtime_kwargs(
+    num_workers: int,
+    pin_memory: bool,
+    persistent_workers: bool | None = None,
+    prefetch_factor: int | None = None,
+):
+    kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if num_workers > 0:
+        kwargs["persistent_workers"] = num_workers > 0 if persistent_workers is None else persistent_workers
+        if prefetch_factor is not None:
+            kwargs["prefetch_factor"] = prefetch_factor
+    return kwargs
+
 def make_binary(df):
     df['REASONb'] = np.where(df['REASON'] == 1, 1, 0)
     df = df.drop(['REASON'], axis=1)
@@ -128,6 +144,10 @@ def train_test_split_stratified(dataset, batch_size,
                               ratio=[0.7, 0.15, 0.15],
                               seed=42,
                               num_workers=0,
+                              drop_last=False,
+                              pin_memory=True,
+                              persistent_workers=None,
+                              prefetch_factor=None,
                               ):
 
     assert abs(sum(ratio) - 1.0) < 1e-6, "ratio must sum to 1.0"
@@ -174,18 +194,20 @@ def train_test_split_stratified(dataset, batch_size,
     print(f"Valid Set Size: {len(val_dataset)}")
     print(f"Test Set Size: {len(test_dataset)}")
 
-    # DataLoader 생성
-    # drop_last=True를 해야 마지막 자투리 배치를 위해 따로 배치 엣지 인덱스를 만들 필요가 없음
-    _persistent = num_workers > 0
+    loader_kwargs = _loader_runtime_kwargs(
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
+    )
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size,
-                                  shuffle=True, num_workers=num_workers, drop_last=True,
-                                  pin_memory=True, persistent_workers=_persistent)
+                                  shuffle=True, drop_last=drop_last,
+                                  **loader_kwargs)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size,
-                                shuffle=False, num_workers=num_workers, drop_last=True,
-                                pin_memory=True, persistent_workers=_persistent)
+                                shuffle=False, drop_last=drop_last,
+                                **loader_kwargs)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size,
-                                 shuffle=False, num_workers=num_workers, drop_last=True,
-                                 pin_memory=True, persistent_workers=_persistent)
+                                 shuffle=False, drop_last=drop_last,
+                                 **loader_kwargs)
 
     return train_dataloader, val_dataloader, test_dataloader, (train_idx, val_idx, test_idx)
-

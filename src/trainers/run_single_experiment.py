@@ -65,11 +65,17 @@ def run_single_experiment(cfg,
 
     # create dataloaders
     split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
+    requires_fixed_batch_edge = cfg["model"]["name"] in ["gin_gru"]
+    drop_last = bool(cfg["train"].get("drop_last", requires_fixed_batch_edge))
     train_loader, val_loader, test_loader, idx = train_test_split_stratified(dataset=dataset,  # type: ignore
                                                                                    batch_size=cfg['train']['batch_size'],
                                                                                    ratio=split_ratio,
                                                                                    seed=split_seed,
                                                                                    num_workers=cfg['train']['num_workers'],
+                                                                                   drop_last=drop_last,
+                                                                                   pin_memory=bool(cfg["train"].get("pin_memory", device.type == "cuda")),
+                                                                                   persistent_workers=cfg["train"].get("persistent_workers", None),
+                                                                                   prefetch_factor=cfg["train"].get("prefetch_factor", None),
                                                                                    )
     # split 완료 후 model seed 적용 (model 초기화/dropout 등에 영향)
     set_seed(model_seed)
@@ -116,11 +122,15 @@ def run_single_experiment(cfg,
     if hasattr(model, "precompute_edge_index_2"):
         model.precompute_edge_index_2(edge_index, cfg["train"]["batch_size"])
 
+    if bool(cfg["train"].get("compile", False)) and device.type == "cuda":
+        compile_mode = cfg["train"].get("compile_mode", "default")
+        model = torch.compile(model, mode=compile_mode)
+
     if trial is None:
         print(model)
         print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
-        print(f'edge index: \n{edge_index}')
-        print(f'edge index shape: \n{edge_index.shape}')
+        print(f'edge index shape: {tuple(edge_index.shape)}')
+        print(f'edge count: {edge_index.size(1):,}')
 
         # Save for later analysis scripts (extract, permutation, reeval)
         edge_index_save_path = os.path.join(run_dir, "edge_index.pt")
@@ -132,15 +142,19 @@ def run_single_experiment(cfg,
     else:
         criterion = nn.CrossEntropyLoss()
     
-    if cfg["train"].get("optimizer", "adam") == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), 
-                                    lr=cfg["train"]["learning_rate"], 
-                                    weight_decay=cfg["train"].get("weight_decay", 0.0))
-        
-    else:
-        optimizer = torch.optim.Adam(model.parameters(),
-                                      lr=cfg["train"]["learning_rate"], 
-                                      weight_decay=cfg["train"].get("weight_decay", 0.0))
+    optimizer_name = cfg["train"].get("optimizer", "adam")
+    optimizer_cls = torch.optim.AdamW if optimizer_name == "adamw" else torch.optim.Adam
+    optimizer_kwargs = {
+        "lr": cfg["train"]["learning_rate"],
+        "weight_decay": cfg["train"].get("weight_decay", 0.0),
+    }
+    if device.type == "cuda" and bool(cfg["train"].get("fused_optimizer", True)):
+        optimizer_kwargs["fused"] = True
+    try:
+        optimizer = optimizer_cls(model.parameters(), **optimizer_kwargs)
+    except (TypeError, RuntimeError):
+        optimizer_kwargs.pop("fused", None)
+        optimizer = optimizer_cls(model.parameters(), **optimizer_kwargs)
 
     scheduler = ReduceLROnPlateau(optimizer, "min", patience=cfg["train"]["lr_scheduler_patience"])
     early_stopper = EarlyStopper(patience=cfg["train"]["early_stopping_patience"])
@@ -163,6 +177,9 @@ def run_single_experiment(cfg,
         trial=trial,
         report_metric=report_metric,
         model_name=cfg["model"]["name"],
+        amp=cfg["train"].get("amp", device.type == "cuda"),
+        tf32=cfg["train"].get("tf32", device.type == "cuda"),
+        disable_tqdm=cfg["train"].get("disable_tqdm", False),
     )
 
     return out
