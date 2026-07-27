@@ -5,6 +5,14 @@ from torch_geometric.nn import GINConv
 
 from src.models.entity_embedding import EntityEmbeddingBatch3
 
+def _make_gin_mlp(in_dim: int, out_dim: int) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Linear(in_dim, out_dim),
+        nn.LayerNorm(out_dim),
+        nn.ReLU(),
+        nn.Linear(out_dim, out_dim),
+    )
+
 class GIN(nn.Module):
     def __init__(self, 
                  embedding_dim, 
@@ -49,31 +57,13 @@ class GIN(nn.Module):
                                                             embedding_dim=embedding_dim)
         self.los_embedding_layer = nn.Embedding(self.max_los + 1, self.node_feature_dim)
         
-        gin_nn_input = nn.Sequential(
-             nn.Linear(self.node_feature_dim, gin_dim),
-             nn.LayerNorm(gin_dim),
-             nn.ReLU(),
-
-             nn.Linear(gin_dim, gin_dim) # 논문에서 적용된 배치 정규화 
-             # nn.LayerNorm(h_dim),  # 마지막 레이어 이후에는 선택적
-        )
-
-        gin_nn = nn.Sequential(
-             nn.Linear(gin_dim, gin_dim),
-             nn.LayerNorm(gin_dim),
-             nn.ReLU(),
-
-             nn.Linear(gin_dim, gin_dim) # 논문에서 적용된 배치 정규화 
-             # nn.LayerNorm(h_dim),  # 마지막 레이어 이후에는 선택적
-        )
-
         self.gin_layers = nn.ModuleList()
 
-        gin_layer1 = GINConv(nn=gin_nn_input, eps=0, train_eps=self.train_eps)
+        gin_layer1 = GINConv(nn=_make_gin_mlp(self.node_feature_dim, gin_dim), eps=0, train_eps=self.train_eps)
         self.gin_layers.append(gin_layer1)
         
         for _ in range(self.gin_layer_num - 1):
-            gin_layer_hidden = GINConv(nn=gin_nn, eps=0, train_eps=self.train_eps)
+            gin_layer_hidden = GINConv(nn=_make_gin_mlp(gin_dim, gin_dim), eps=0, train_eps=self.train_eps)
             self.gin_layers.append(gin_layer_hidden)
 
         # 분류기 레이어 정의
@@ -84,6 +74,7 @@ class GIN(nn.Module):
             nn.ReLU(),
             nn.Linear(self.classifier_dim * 2, out_dim)
         )
+        self._edge_format_cache = None
 
     def _validate_x_feature_width(self, x: torch.Tensor) -> None:
         expected_width = len(self.col_dims)
@@ -98,6 +89,20 @@ class GIN(nn.Module):
         if los.ndim != 1:
             raise ValueError("GIN LOS path expects rank-1 LOS indices")
         return self.los_embedding_layer(los.long())
+
+    def _is_shared_edge(self, edge_index: torch.Tensor, num_nodes: int) -> bool:
+        key = (
+            edge_index.device.type,
+            edge_index.device.index,
+            edge_index.data_ptr(),
+            edge_index.size(1),
+            num_nodes,
+        )
+        if self._edge_format_cache is not None and self._edge_format_cache[0] == key:
+            return self._edge_format_cache[1]
+        is_shared = edge_index.numel() == 0 or int(edge_index.detach().max().cpu().item()) < num_nodes
+        self._edge_format_cache = (key, is_shared)
+        return is_shared
 
     def forward(self, x, los, edge_index, **kwargs):
         # initial setting
@@ -127,12 +132,16 @@ class GIN(nn.Module):
             x_embedded = torch.cat((x_embedded, los_embedded), dim=1)
 
         # gin layers
-        node_embeddings = x_embedded.reshape(batch_size * num_nodes, -1) # [batch * num_var, entity_emb_dim]
+        use_shared_edge = self._is_shared_edge(edge_index, num_nodes)
+        node_embeddings = x_embedded if use_shared_edge else x_embedded.reshape(batch_size * num_nodes, -1)
         sum_pooled = []
         for layer in self.gin_layers:
-            node_embeddings = layer(node_embeddings, edge_index) # [batch * num_var, feature_dim]
-            x_temp = node_embeddings.reshape(batch_size, num_nodes, -1) # [batch, num_var, feature_dim]
-            x_sum = torch.sum(x_temp, dim=1) # [batch, feature_dim]
+            node_embeddings = layer(node_embeddings, edge_index)
+            if use_shared_edge:
+                x_sum = torch.sum(node_embeddings, dim=1)
+            else:
+                x_temp = node_embeddings.reshape(batch_size, num_nodes, -1)
+                x_sum = torch.sum(x_temp, dim=1)
             sum_pooled.append(x_sum)
         graph_emb = torch.cat(sum_pooled, dim=1) # [batch, feature_dim * layer_num]
 

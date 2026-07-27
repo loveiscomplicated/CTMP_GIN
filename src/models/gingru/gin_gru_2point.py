@@ -11,6 +11,15 @@ sys.path.append(parent_dir)
 
 from src.models.entity_embedding import EntityEmbeddingBatch3
 
+def _make_gin_mlp(in_dim: int, out_dim: int, dropout_p: float) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Linear(in_dim, out_dim),
+        nn.LayerNorm(out_dim),
+        nn.ReLU(),
+        nn.Dropout(dropout_p),
+        nn.Linear(out_dim, out_dim),
+    )
+
 
 def append_los_to_vars(x: torch.Tensor, los_batch: torch.Tensor, max_los: float = 37.0):
     """
@@ -101,28 +110,11 @@ class GinGru_2_Point(nn.Module):
         # Entity Embedding
         self.entity_embedding_layer = EntityEmbeddingBatch3(col_dims=self.col_dims, embedding_dim=embedding_dim)
 
-        # GIN MLPs
-        gin_nn_input = nn.Sequential(
-            nn.Linear(embedding_dim, gin_hidden_channel),
-            nn.LayerNorm(gin_hidden_channel),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_p),
-            nn.Linear(gin_hidden_channel, gin_hidden_channel),
-        )
-
-        gin_nn = nn.Sequential(
-            nn.Linear(gin_hidden_channel, gin_hidden_channel),
-            nn.LayerNorm(gin_hidden_channel),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_p),
-            nn.Linear(gin_hidden_channel, gin_hidden_channel),
-        )
-
         # GIN layers
         self.gin_layers = nn.ModuleList()
-        self.gin_layers.append(GINConv(nn=gin_nn_input, eps=0, train_eps=train_eps))
+        self.gin_layers.append(GINConv(nn=_make_gin_mlp(embedding_dim, gin_hidden_channel, self.dropout_p), eps=0, train_eps=train_eps))
         for _ in range(gin_layers - 1):
-            self.gin_layers.append(GINConv(nn=gin_nn, eps=0, train_eps=train_eps))
+            self.gin_layers.append(GINConv(nn=_make_gin_mlp(gin_hidden_channel, gin_hidden_channel, self.dropout_p), eps=0, train_eps=train_eps))
 
         # GRU
         gru_input_ch = gin_hidden_channel * gin_layers
@@ -137,11 +129,22 @@ class GinGru_2_Point(nn.Module):
             nn.Linear(gru_hidden_channel * 2, out_dim),
         )
 
-        # keep refs for reset_parameters
-        self.gin_nn_input = gin_nn_input
-        self.gin_nn = gin_nn
-
         self.reset_parameters()
+        self._edge_format_cache = None
+
+    def _is_shared_pair_edge(self, edge_index: torch.Tensor, num_nodes: int) -> bool:
+        key = (
+            edge_index.device.type,
+            edge_index.device.index,
+            edge_index.data_ptr(),
+            edge_index.size(1),
+            num_nodes,
+        )
+        if self._edge_format_cache is not None and self._edge_format_cache[0] == key:
+            return self._edge_format_cache[1]
+        is_shared = edge_index.numel() == 0 or int(edge_index.detach().max().cpu().item()) < 2 * num_nodes
+        self._edge_format_cache = (key, is_shared)
+        return is_shared
 
     def forward(self, x_batch: torch.Tensor, LOS_batch: torch.Tensor, template_edge_index, device):
         """
@@ -168,9 +171,12 @@ class GinGru_2_Point(nn.Module):
 
         # Select admission/discharge variable sets and concat along batch: [B*2, N, F]
         x_separated = separate_x(x_embedded, ad_idx_t=self.ad_idx_t, dis_idx_t=self.dis_idx_t) # type: ignore
-        # Flatten into [B*2*N, F]
         num_separated_nodes = int(self.ad_idx_t.numel())
-        x_after_gin = x_separated.reshape(batch_size * 2 * num_separated_nodes, -1)
+        use_shared_pair_edge = self._is_shared_pair_edge(template_edge_index, num_separated_nodes)
+        if use_shared_pair_edge:
+            x_after_gin = torch.cat([x_separated[:batch_size], x_separated[batch_size:]], dim=1)
+        else:
+            x_after_gin = x_separated.reshape(batch_size * 2 * num_separated_nodes, -1)
 
         # Apply GIN layers, sum-pool per graph at each layer, then concat pooled outputs
         sum_pooled = []
@@ -178,8 +184,13 @@ class GinGru_2_Point(nn.Module):
             x_after_gin = layer(x_after_gin, template_edge_index)   # [B*2*N, gin_hidden_channel]
             x_after_gin = self.gin_layer_out_dropout(x_after_gin)
 
-            x_graph = x_after_gin.reshape(batch_size * 2, num_separated_nodes, self.hidden_channel)  # [B*2, N, H]
-            x_sum = torch.sum(x_graph, dim=1)  # [B*2, H]
+            if use_shared_pair_edge:
+                ad_sum = torch.sum(x_after_gin[:, :num_separated_nodes, :], dim=1)
+                dis_sum = torch.sum(x_after_gin[:, num_separated_nodes:, :], dim=1)
+                x_sum = torch.cat([ad_sum, dis_sum], dim=0)
+            else:
+                x_graph = x_after_gin.reshape(batch_size * 2, num_separated_nodes, self.hidden_channel)  # [B*2, N, H]
+                x_sum = torch.sum(x_graph, dim=1)  # [B*2, H]
             sum_pooled.append(x_sum)
 
         gin_result = torch.cat(sum_pooled, dim=1)  # [B*2, H * num_layers]
@@ -196,9 +207,8 @@ class GinGru_2_Point(nn.Module):
         return self.classifier(gru_h)       # [B, 1]
 
     def reset_parameters(self):
-        # GIN MLPs
-        for block in [self.gin_nn_input, self.gin_nn]:
-            for m in block.modules():
+        for layer in self.gin_layers:
+            for m in layer.nn.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                     if m.bias is not None:

@@ -139,12 +139,5 @@ class HybridOrdinalLOSEncoder(nn.Module):
         los_idx = los_idx.long()
         if los_idx.numel() == 0:
             return self.all_embeddings().new_empty((*los_idx.shape, self.out_dim))
-        idx_min = int(los_idx.min().item())
-        idx_max = int(los_idx.max().item())
-        if idx_min < 0 or idx_max >= self.num_los_classes:
-            raise ValueError(
-                f"LOS class index out of range: min={idx_min} max={idx_max} "
-                f"valid=[0, {self.num_los_classes - 1}]"
-            )
         emb_table = self.all_embeddings()
         return emb_table[los_idx]

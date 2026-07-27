@@ -49,6 +49,17 @@ def seperate_x(x: torch.Tensor, ad_idx_t: torch.Tensor, dis_idx_t: torch.Tensor)
     return torch.cat([ad_tensor, dis_tensor], dim=0)             # [B*2, N, F]
 
 
+def pair_x(x: torch.Tensor, ad_idx_t: torch.Tensor, dis_idx_t: torch.Tensor) -> torch.Tensor:
+    """Split node features into admission / discharge halves within each sample.
+
+    Returns:
+        [B, 2*num_nodes, emb_dim] where the first half is admission.
+    """
+    ad_tensor = torch.index_select(x, dim=1, index=ad_idx_t)
+    dis_tensor = torch.index_select(x, dim=1, index=dis_idx_t)
+    return torch.cat([ad_tensor, dis_tensor], dim=1)
+
+
 # ---------------------------------------------------------------------------
 # GatedFusion
 # ---------------------------------------------------------------------------
@@ -226,6 +237,7 @@ class CTMPGIN(nn.Module):
         )
 
         self.reset_parameters()
+        self._edge_format_cache = None
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -282,6 +294,35 @@ class CTMPGIN(nn.Module):
 
         return h, graph_emb
 
+    def _combine_readouts(self, readouts: list[torch.Tensor]) -> torch.Tensor:
+        if self.readout_mode == "concat":
+            return torch.cat(readouts, dim=-1)
+        if self.readout_mode == "sum":
+            return torch.stack(readouts, dim=0).sum(0)
+        return readouts[-1]
+
+    def _run_gin_pair(
+        self,
+        layers: nn.ModuleList,
+        x_pair: torch.Tensor,
+        edge_index: torch.Tensor,
+        hidden_ch: int,
+        num_nodes: int,
+        edge_attr: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        h = x_pair
+        ad_readouts: list[torch.Tensor] = []
+        dis_readouts: list[torch.Tensor] = []
+        for layer in layers:
+            if edge_attr is None:
+                h = layer(x=h, edge_index=edge_index)
+            else:
+                h = layer(x=h, edge_index=edge_index, edge_attr=edge_attr)
+            ad_readouts.append(h[:, :num_nodes, :hidden_ch].mean(dim=1))
+            dis_readouts.append(h[:, num_nodes:, :hidden_ch].mean(dim=1))
+
+        return h, self._combine_readouts(ad_readouts), self._combine_readouts(dis_readouts)
+
     # ------------------------------------------------------------------
     # Shared forward backbone
     # ------------------------------------------------------------------
@@ -333,6 +374,54 @@ class CTMPGIN(nn.Module):
             return logit, fused, w, ad_f, dis_f, merged_f, logits_gate
         return logit
 
+    def _backbone_pair(
+        self,
+        x_pair: torch.Tensor,
+        edge_index: torch.Tensor,
+        batch_size: int,
+        num_nodes: int,
+        los: Optional[torch.Tensor] = None,
+        edge_index_2: Optional[torch.Tensor] = None,
+        edge_attr: Optional[torch.Tensor] = None,
+        return_internals: bool = False,
+    ):
+        x_node, ad_readout, dis_readout = self._run_gin_pair(
+            self.gin_1,
+            x_pair,
+            edge_index,
+            self.gin_hidden_channel,
+            num_nodes,
+        )
+
+        if edge_index_2 is None:
+            edge_index_2, edge_attr = self.get_new_edge(edge_index, los, batch_size)
+        x_inter, ad_inter_readout, dis_inter_readout = self._run_gin_pair(
+            self.gin_2,
+            x_node,
+            edge_index_2,
+            self.gin_hidden_channel_2,
+            num_nodes,
+            edge_attr=edge_attr,
+        )
+        del x_inter
+        merged_readout = 0.5 * (ad_inter_readout + dis_inter_readout)
+
+        ad_f = self.proj_ad(ad_readout)
+        dis_f = self.proj_dis(dis_readout)
+        merged_f = self.proj_merged(merged_readout)
+
+        if self.remove_gated_fusion:
+            fused = (ad_f + dis_f + merged_f) / 3.0
+            w = logits_gate = None
+        else:
+            fused, w, logits_gate = self.gated_fusion(ad_f, dis_f, merged_f)
+
+        logit = self.classifier_b(fused)
+
+        if return_internals:
+            return logit, fused, w, ad_f, dis_f, merged_f, logits_gate
+        return logit
+
     # ------------------------------------------------------------------
     # Public forward methods
     # ------------------------------------------------------------------
@@ -357,17 +446,25 @@ class CTMPGIN(nn.Module):
         los_idx = los_idx.long()
         if los_idx.numel() == 0:
             return self._cross_temporal_los_embedding_table().new_empty((*los_idx.shape, self.los_embedding_dim))
-        idx_min = int(los_idx.min().item())
-        idx_max = int(los_idx.max().item())
-        if idx_min < 1 or idx_max > self.max_los:
-            raise ValueError(
-                f"LOS edge index out of range: min={idx_min} max={idx_max} valid=[1, {self.max_los}]"
-            )
         if self.los_encoder is None:
             if self.embed_los is None:
                 raise RuntimeError("embed_los is unexpectedly None for embedding LOS mode")
             return self.embed_los(los_idx)
         return self.los_encoder(los_idx - 1)
+
+    def _is_shared_pair_edge(self, edge_index: torch.Tensor, num_nodes: int) -> bool:
+        key = (
+            edge_index.device.type,
+            edge_index.device.index,
+            edge_index.data_ptr(),
+            edge_index.size(1),
+            num_nodes,
+        )
+        if self._edge_format_cache is not None and self._edge_format_cache[0] == key:
+            return self._edge_format_cache[1]
+        is_shared = edge_index.numel() == 0 or int(edge_index.detach().max().cpu().item()) < 2 * num_nodes
+        self._edge_format_cache = (key, is_shared)
+        return is_shared
 
     def forward(
         self,
@@ -382,7 +479,14 @@ class CTMPGIN(nn.Module):
         num_nodes  = len(self.ad_idx_t)
 
         x_embedded = self.entity_embedding_layer(x)
-        x_sep  = seperate_x(x_embedded, self.ad_idx_t, self.dis_idx_t)
+        if self._is_shared_pair_edge(edge_index, num_nodes):
+            x_pair = pair_x(x_embedded, self.ad_idx_t, self.dis_idx_t)
+            return self._backbone_pair(
+                x_pair, edge_index, batch_size, num_nodes,
+                los=los, return_internals=return_internals,
+            )
+
+        x_sep = seperate_x(x_embedded, self.ad_idx_t, self.dis_idx_t)
         x_flat = x_sep.reshape(batch_size * 2 * num_nodes, -1)
 
         return self._backbone(
@@ -404,6 +508,12 @@ class CTMPGIN(nn.Module):
         num_nodes  = len(self.ad_idx_t)
 
         x_sep  = seperate_x(x_embedded, self.ad_idx_t, self.dis_idx_t)
+        if self._is_shared_pair_edge(edge_index, num_nodes):
+            x_pair = torch.cat([x_sep[:batch_size], x_sep[batch_size:]], dim=1)
+            return self._backbone_pair(
+                x_pair, edge_index, batch_size, num_nodes,
+                edge_index_2=edge_index_2, edge_attr=edge_attr,
+            )
         x_flat = x_sep.reshape(batch_size * 2 * num_nodes, -1)
 
         return self._backbone(
@@ -417,13 +527,12 @@ class CTMPGIN(nn.Module):
 
     def precompute_edge_index_2(self, edge_index: torch.Tensor, batch_size: int) -> None:
         """Cache edge_index_2 once per trial to avoid repeated CPU tensor creation."""
-        num_nodes        = len(self.ad_col_index)
-        merged_num_nodes = num_nodes * batch_size
-        start_node       = torch.arange(0, merged_num_nodes, device=edge_index.device)
-        end_node         = start_node + merged_num_nodes
-        cross_edge_index = torch.stack([start_node, end_node], dim=0)
-        edge_index_2     = torch.cat([edge_index, cross_edge_index], dim=1)
-        self.register_buffer("_cached_edge_index_2", edge_index_2)
+        num_nodes = len(self.ad_col_index)
+        edge_index_2 = self._build_edge_index_2(edge_index, num_nodes, batch_size)
+        if "_cached_edge_index_2" in self._buffers:
+            self._buffers["_cached_edge_index_2"] = edge_index_2
+        else:
+            self.register_buffer("_cached_edge_index_2", edge_index_2)
 
     def get_new_edge(
         self, edge_index: torch.Tensor, los: torch.Tensor, batch_size: int
@@ -439,6 +548,12 @@ class CTMPGIN(nn.Module):
     def _build_edge_index_2(
         self, edge_index: torch.Tensor, num_nodes: int, batch_size: int
     ) -> torch.Tensor:
+        if self._is_shared_pair_edge(edge_index, num_nodes):
+            start_node = torch.arange(0, num_nodes, device=edge_index.device)
+            end_node = start_node + num_nodes
+            cross_edge_index = torch.stack([start_node, end_node], dim=0)
+            return torch.cat([edge_index, cross_edge_index], dim=1)
+
         merged_num_nodes = num_nodes * batch_size
         start_node       = torch.arange(0, merged_num_nodes, device=edge_index.device)
         end_node         = start_node + merged_num_nodes
@@ -465,6 +580,12 @@ class CTMPGIN(nn.Module):
         # Internal edges → NONE token (index 0), no-copy expand
         none_emb           = los_table[0]                                            # (D,)
         edge_attr_internal = none_emb.unsqueeze(0).expand(E_internal, -1)           # (E_internal, D)
+
+        if self._is_shared_pair_edge(edge_index, num_nodes):
+            edge_attr_internal = none_emb.view(1, 1, -1).expand(batch_size, E_internal, -1)
+            los_idx = los.view(batch_size).to(device).long()
+            edge_attr_cross = self.encode_los_indices(los_idx).unsqueeze(1).expand(-1, num_nodes, -1)
+            return torch.cat([edge_attr_internal, edge_attr_cross], dim=1)
 
         # Cross edges use the observed LOS token in retrospective CTMP-GIN.
         los_idx = los.view(batch_size).to(device).long().repeat_interleave(num_nodes)  # (B*N,)

@@ -45,6 +45,17 @@ def fully_connected_edge_index_batched(num_nodes, batch_size):
     batched_edge_index = torch.cat(edge_list, dim=1)
     return batched_edge_index
 
+def fully_connected_pair_edge_index(num_nodes):
+    """
+    Create a shared admission/discharge pair graph for one sample.
+
+    Nodes [0, N) are admission variables and nodes [N, 2N) are discharge
+    variables. The returned edge index can be used directly with PyG layers
+    receiving node features shaped [B, 2N, F].
+    """
+    single = fully_connected_edge_index(num_nodes=num_nodes)
+    return torch.cat([single, single + num_nodes], dim=1)
+
 def mi_edge_index_single(
     mi_dict, top_k=6, threshold=0.01, pruning_ratio=0.5, return_edge_attr=False
 ):
@@ -226,6 +237,59 @@ def mi_edge_index_batched(
         batched_attr_list = torch.cat(attr_list, dim=0)
         return batched_edge_index, batched_attr_list
     return batched_edge_index
+
+
+def mi_edge_index_pair_graph(
+    num_nodes,
+    mi_ad_dict,
+    mi_dis_dict,
+    top_k=6,
+    threshold=0.01,
+    pruning_ratio=0.5,
+    return_edge_attr=False,
+):
+    """
+    Build a shared admission/discharge pair graph for CTMP-GIN and
+    GIN-GRU-2-points.
+
+    The graph has 2N nodes: admission nodes [0, N), discharge nodes [N, 2N).
+    It is independent of batch size and is intended for PyG batched inputs.
+    """
+    if return_edge_attr:
+        single_ad, edge_attr_ad = mi_edge_index_single(
+            mi_dict=mi_ad_dict,
+            top_k=top_k,
+            threshold=threshold,
+            pruning_ratio=pruning_ratio,
+            return_edge_attr=True,
+        )
+        single_dis, edge_attr_dis = mi_edge_index_single(
+            mi_dict=mi_dis_dict,
+            top_k=top_k,
+            threshold=threshold,
+            pruning_ratio=pruning_ratio,
+            return_edge_attr=True,
+        )
+        return (
+            torch.cat([single_ad, single_dis + num_nodes], dim=1),
+            torch.cat([edge_attr_ad, edge_attr_dis], dim=0),
+        )
+
+    single_ad = mi_edge_index_single(
+        mi_dict=mi_ad_dict,
+        top_k=top_k,
+        threshold=threshold,
+        pruning_ratio=pruning_ratio,
+        return_edge_attr=False,
+    )
+    single_dis = mi_edge_index_single(
+        mi_dict=mi_dis_dict,
+        top_k=top_k,
+        threshold=threshold,
+        pruning_ratio=pruning_ratio,
+        return_edge_attr=False,
+    )
+    return torch.cat([single_ad, single_dis + num_nodes], dim=1)
     
 
 def mi_edge_index_batched_for_a3tgcn(
@@ -275,7 +339,21 @@ def mi_edge_index_batched_for_a3tgcn(
             pruning_ratio=pruning_ratio,
             return_edge_attr=return_edge_attr
         )
-        return single
+    return single
+
+def mi_edge_index_for_gin(
+                                  mi_dict_all_variables,
+                                  top_k=6,
+                                  threshold=0.01,
+                                  pruning_ratio=0.5,
+                                  return_edge_attr=False):
+    return mi_edge_index_single(
+        mi_dict=mi_dict_all_variables,
+        top_k=top_k,
+        threshold=threshold,
+        pruning_ratio=pruning_ratio,
+        return_edge_attr=return_edge_attr,
+    )
 
 def mi_edge_index_batched_for_gin(batch_size, 
                                   num_nodes, 

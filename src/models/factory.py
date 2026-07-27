@@ -2,10 +2,14 @@
 import pandas
 import os
 from src.data_processing.mi_dict import search_mi_dict, cv_mi_dict
-from src.data_processing.edge import (fully_connected_edge_index_batched, 
+from src.data_processing.edge import (fully_connected_edge_index,
+                                      fully_connected_edge_index_batched,
+                                      fully_connected_pair_edge_index,
                                       mi_edge_index_batched, 
                                       mi_edge_index_batched_for_a3tgcn, 
-                                      mi_edge_index_batched_for_gin, 
+                                      mi_edge_index_batched_for_gin,
+                                      mi_edge_index_for_gin,
+                                      mi_edge_index_pair_graph,
                                       )
 from src.models.ctmp_gin import CTMPGIN
 from src.models.gin import GIN
@@ -38,13 +42,19 @@ def build_edge(model_name: str,
                mi_cached: bool = True,
                **kwargs):
     if not kwargs["is_mi_based"]:
+        if model_name == "gin":
+            return fully_connected_edge_index(num_nodes=num_nodes)
+        if model_name in ["ctmp_gin", "gin_gru_2_points"]:
+            return fully_connected_pair_edge_index(num_nodes=num_nodes)
+        if model_name in ["a3tgcn", "a3tgcn_2_points"]:
+            return fully_connected_edge_index(num_nodes=num_nodes)
         return fully_connected_edge_index_batched(num_nodes=num_nodes, batch_size=batch_size)
 
     if mi_cached:
         mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = search_mi_dict(root=root,
                                     seed=seed,
                                     train_df=train_df,
-                                    n_neighbors=kwargs['n_neighbors'],
+                                    n_neighbors=kwargs.get('n_neighbors', None),
                                     cache_path=kwargs.get('cache_path', None),
                                     remove_los=kwargs.get("remove_los", True),
                                     )
@@ -52,7 +62,7 @@ def build_edge(model_name: str,
         mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = cv_mi_dict(root=root,
                             seed=seed,
                             train_df=train_df,
-                            n_neighbors=kwargs['n_neighbors'],
+                            n_neighbors=kwargs.get('n_neighbors', None),
                             remove_los=kwargs.get("remove_los", True),
                             )
 
@@ -66,7 +76,16 @@ def build_edge(model_name: str,
                                                         return_edge_attr=kwargs["return_edge_attr"])
         return edge_index
     
-    if model_name in ["gin", "mlp"]:
+    if model_name == "gin":
+        edge_index = mi_edge_index_for_gin(
+                                                        mi_dict_all_variables=mi_dict,
+                                                        top_k=kwargs["top_k"],
+                                                        threshold=kwargs["threshold"],
+                                                        pruning_ratio=kwargs["pruning_ratio"],
+                                                        return_edge_attr=kwargs["return_edge_attr"])
+        return edge_index
+
+    if model_name == "mlp":
         edge_index = mi_edge_index_batched_for_gin(batch_size=batch_size,
                                                         num_nodes=num_nodes,
                                                         mi_dict_all_variables=mi_dict,
@@ -75,8 +94,18 @@ def build_edge(model_name: str,
                                                         pruning_ratio=kwargs["pruning_ratio"],
                                                         return_edge_attr=kwargs["return_edge_attr"])
         return edge_index
+
+    if model_name in ["ctmp_gin", "gin_gru_2_points"]:
+        edge_index = mi_edge_index_pair_graph(num_nodes=num_nodes,
+                                              mi_ad_dict=mi_ad_dict,
+                                              mi_dis_dict=mi_dis_dict,
+                                              top_k=kwargs["top_k"],
+                                              threshold=kwargs["threshold"],
+                                              pruning_ratio=kwargs["pruning_ratio"],
+                                              return_edge_attr=kwargs["return_edge_attr"])
+        return edge_index
     
-    edge_index = mi_edge_index_batched(batch_size=batch_size, # ctmp_gin, gin_gru, gin_gru_2_points
+    edge_index = mi_edge_index_batched(batch_size=batch_size, # legacy gin_gru
                                        num_nodes=num_nodes,
                                        mi_ad_dict=mi_ad_dict,
                                        mi_dis_dict=mi_dis_dict,
@@ -85,4 +114,3 @@ def build_edge(model_name: str,
                                        pruning_ratio=kwargs["pruning_ratio"],
                                        return_edge_attr=kwargs["return_edge_attr"])
     return edge_index
-
