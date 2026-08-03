@@ -25,11 +25,37 @@ FAILED_DIR = f"{REMOTE_BASE}/failed"
 # (선택) 처리중 폴더(동시 워커 대비)
 PROCESSING_DIR = f"{REMOTE_BASE}/processing"
 
-os.makedirs(LOCAL_CACHE, exist_ok=True)
-
 # [ADD] retry 설정
 MAX_RETRIES = 3
 RETRY_SLEEP = 2  # seconds
+
+
+def _mi_remove_los_for_cfg(cfg: dict) -> bool:
+    admission_only = bool(cfg.get("admission_only", False))
+    model_name = cfg["model"].get("name", None)
+    return not (
+        not admission_only
+        and model_name in ["gin", "gin_gru_2_points", "a3tgcn_2_points"]
+    )
+
+
+def _dataset_kwargs_from_cfg(cfg: dict, remove_los: bool) -> dict:
+    train_cfg = cfg.get("train", {})
+    return {
+        "binary": train_cfg.get("binary", True),
+        "ig_label": train_cfg.get("ig_label", False),
+        "remove_los": remove_los,
+        "do_preprocess": train_cfg.get("do_preprocess", True),
+        "admission_only": cfg.get("admission_only", False),
+    }
+
+
+def _split_seed_from_cfg(cfg: dict, seed: int) -> int:
+    return int(cfg.get("train", {}).get("split_seed", seed))
+
+
+def _ensure_local_cache() -> None:
+    os.makedirs(LOCAL_CACHE, exist_ok=True)
 
 def rclone_mkdir(remote_dir: str):
     subprocess.run(["rclone", "mkdir", remote_dir], check=True)
@@ -76,9 +102,7 @@ def load_train_df(mode, fold, seed, cfg, remove_los):
     if mode == "single":
         dataset = TEDSTensorDataset(
             root=root,
-            binary=cfg["train"].get("binary", True),
-            ig_label=cfg["train"].get("ig_label", False),
-            remove_los=remove_los,
+            **_dataset_kwargs_from_cfg(cfg, remove_los),
         )
 
         cfg["model"]["params"]["col_info"] = dataset.col_info
@@ -96,7 +120,7 @@ def load_train_df(mode, fold, seed, cfg, remove_los):
             dataset=dataset,  # type: ignore
             batch_size=cfg['train']['batch_size'],
             ratio=split_ratio,
-            seed=seed,
+            seed=_split_seed_from_cfg(cfg, seed),
             num_workers=cfg['train']['num_workers'],
         )
         train_df = dataset.processed_df.iloc[idx[0]]
@@ -131,6 +155,7 @@ def process_one_request_file(fname: str):
         req = json.load(f)
 
     artifact_key = req["artifact_key"]
+    _ensure_local_cache()
     local_cache_path = os.path.join(LOCAL_CACHE, f"{artifact_key}.pkl")
 
     # 요청에서 캐시 사용 여부를 확인 (기본값 True)
@@ -144,10 +169,7 @@ def process_one_request_file(fname: str):
         else:
             print(f"Cache miss for {artifact_key}. Computing MI...")
         
-        remove_los = True
-        model_name = req["cfg"]["model"].get("name", None)
-        if model_name in ["gin", "gin_gru_2_points", "a3tgcn_2_points"]:
-            remove_los = False
+        remove_los = _mi_remove_los_for_cfg(req["cfg"])
         
         train_df = load_train_df(
             req["mode"],

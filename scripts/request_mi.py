@@ -14,7 +14,6 @@ REMOTE_BASE = "gdrive:CTMP_GIN_mi_service"
 
 LOCAL_CACHE_DIR = Path("/workspace/CTMP_GIN/cache/mi_dict")
 # LOCAL_CACHE_DIR = Path(".") # for debugging
-LOCAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Rate-limit constants
 _RATE_LIMIT_MARKERS = ("rateLimitExceeded", "RATE_LIMIT_EXCEEDED", "403", "429")
@@ -93,6 +92,15 @@ def _run(cmd: list[str], *, allow_rate_limit_retry: bool = True) -> str:
             ) from e
 
 
+def _mi_remove_los_for_cfg(cfg: dict) -> bool:
+    admission_only = bool(cfg.get("admission_only", False))
+    model_name = cfg["model"].get("name", None)
+    return not (
+        not admission_only
+        and model_name in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]
+    )
+
+
 def _artifact_key(mode: str, fold: int | None, seed: int, cfg: dict, remove_los: bool=True) -> str:
     train_cfg = cfg.get("train", {})
     split_seed = train_cfg.get("split_seed", seed)
@@ -102,12 +110,18 @@ def _artifact_key(mode: str, fold: int | None, seed: int, cfg: dict, remove_los:
         f"{train_cfg.get('val_ratio', 'na')}-"
         f"{train_cfg.get('test_ratio', 'na')}"
     )
+    dataset_sig = (
+        f"binary={train_cfg.get('binary', True)}"
+        f"__ig_label={train_cfg.get('ig_label', False)}"
+        f"__do_preprocess={train_cfg.get('do_preprocess', True)}"
+        f"__admission_only={cfg.get('admission_only', False)}"
+    )
     if mode == "cv":
         if fold is None:
             raise ValueError("mode=cv requires fold")
-        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__{split_sig}__remove_los={remove_los}"
+        return f"mi__ds={DATASET_ID}__mode=cv__fold={fold}__seed={seed}__{split_sig}__{dataset_sig}__remove_los={remove_los}"
     if mode == "single":
-        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__{split_sig}__remove_los={remove_los}"
+        return f"mi__ds={DATASET_ID}__mode=single__seed={seed}__{split_sig}__{dataset_sig}__remove_los={remove_los}"
     raise ValueError("mode must be 'cv' or 'single'")
 
 
@@ -126,6 +140,10 @@ def _ensure_remote_dirs() -> None:
     _run(["rclone", "mkdir", f"{REMOTE_BASE}/requests"])
     _run(["rclone", "mkdir", f"{REMOTE_BASE}/responses"])
     _remote_dirs_ensured = True
+
+
+def _ensure_local_cache_dir() -> None:
+    LOCAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _acquire_lock(lock_dir: Path, local_pkl: Path, use_cache: bool = True) -> bool:
@@ -205,12 +223,9 @@ def request_mi(
     """
     # Stagger workers on first call to avoid simultaneous API burst
     _apply_startup_jitter()
+    _ensure_local_cache_dir()
 
-    remove_los = True
-    model_name = cfg["model"].get("name", None)
-    if model_name in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]:
-        remove_los = False
-
+    remove_los = _mi_remove_los_for_cfg(cfg)
     artifact_key = _artifact_key(mode, fold, seed, cfg, remove_los)
     local_pkl = LOCAL_CACHE_DIR / f"{artifact_key}.pkl"
 
