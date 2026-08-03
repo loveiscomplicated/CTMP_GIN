@@ -16,6 +16,15 @@ from src.models.a3tgcn.temporalgcn import TGCN2
 from src.models.ctmp_gin.model import CTMPGIN
 from src.models.gin.model import GIN
 from src.models.gingru.gin_gru_2point import GinGru_2_Point
+from scripts.mi_worker import (
+    _dataset_kwargs_from_cfg,
+    _mi_remove_los_for_cfg as _worker_mi_remove_los_for_cfg,
+    _split_seed_from_cfg,
+)
+from scripts.request_mi import (
+    _artifact_key,
+    _mi_remove_los_for_cfg as _request_mi_remove_los_for_cfg,
+)
 
 
 def test_mi_top_k_uses_descending_mi_values() -> None:
@@ -41,6 +50,79 @@ def test_mi_cache_path_is_split_aware(tmp_path) -> None:
     second = _mi_cache_path(str(tmp_path), seed=1, train_df=df.iloc[[0, 1, 3]], remove_los=True)
 
     assert first != second
+
+
+def test_remote_mi_worker_uses_training_split_and_dataset_options() -> None:
+    cfg = {
+        "admission_only": True,
+        "model": {"name": "gin"},
+        "train": {
+            "binary": False,
+            "ig_label": True,
+            "do_preprocess": False,
+            "split_seed": 123,
+        },
+    }
+
+    assert _split_seed_from_cfg(cfg, seed=7) == 123
+    assert _split_seed_from_cfg({"train": {}}, seed=7) == 7
+    assert _worker_mi_remove_los_for_cfg(cfg) is True
+    assert _dataset_kwargs_from_cfg(cfg, remove_los=True) == {
+        "binary": False,
+        "ig_label": True,
+        "remove_los": True,
+        "do_preprocess": False,
+        "admission_only": True,
+    }
+
+
+def test_remote_mi_artifact_key_tracks_dataset_options() -> None:
+    base_cfg = {
+        "admission_only": False,
+        "model": {"name": "gin"},
+        "train": {
+            "binary": True,
+            "ig_label": False,
+            "do_preprocess": True,
+            "split_seed": 42,
+            "train_ratio": 0.7,
+            "val_ratio": 0.15,
+            "test_ratio": 0.15,
+        },
+    }
+    no_preprocess_cfg = {
+        **base_cfg,
+        "train": {**base_cfg["train"], "do_preprocess": False},
+    }
+    admission_only_cfg = {**base_cfg, "admission_only": True}
+
+    assert _request_mi_remove_los_for_cfg(base_cfg) is False
+    assert _request_mi_remove_los_for_cfg(admission_only_cfg) is True
+
+    first = _artifact_key(
+        "single",
+        None,
+        seed=1,
+        cfg=base_cfg,
+        remove_los=_request_mi_remove_los_for_cfg(base_cfg),
+    )
+    second = _artifact_key(
+        "single",
+        None,
+        seed=1,
+        cfg=no_preprocess_cfg,
+        remove_los=_request_mi_remove_los_for_cfg(no_preprocess_cfg),
+    )
+    third = _artifact_key(
+        "single",
+        None,
+        seed=1,
+        cfg=admission_only_cfg,
+        remove_los=_request_mi_remove_los_for_cfg(admission_only_cfg),
+    )
+
+    assert first != second
+    assert first != third
 
 
 def test_gin_hidden_layers_do_not_share_mlp_instances() -> None:
