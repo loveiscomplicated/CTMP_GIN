@@ -134,6 +134,7 @@ def make_loaders(dataset,
                  batch_size, 
                  num_workers, 
                  drop_last=False,
+                 eval_drop_last=None,
                  pin_memory=False,
                  persistent_workers=None,
                  prefetch_factor=None):
@@ -152,14 +153,17 @@ def make_loaders(dataset,
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
     )
+    if eval_drop_last is None:
+        eval_drop_last = drop_last
+
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size,
                                   shuffle=True, drop_last=drop_last,
                                   **loader_kwargs)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size,
-                                shuffle=False, drop_last=drop_last,
+                                shuffle=False, drop_last=eval_drop_last,
                                 **loader_kwargs)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size,
-                                 shuffle=False, drop_last=drop_last,
+                                 shuffle=False, drop_last=eval_drop_last,
                                  **loader_kwargs)
     
     return train_dataloader, val_dataloader, test_dataloader

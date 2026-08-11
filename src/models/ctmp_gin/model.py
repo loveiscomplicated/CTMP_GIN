@@ -126,6 +126,8 @@ class CTMPGIN(nn.Module):
         remove_all_proj: bool = False,
         remove_gated_fusion: bool = False,
         readout_mode: ReadoutMode = "concat",
+        ct_edge_mode: str = "full",
+        remove_los_edge: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -146,6 +148,10 @@ class CTMPGIN(nn.Module):
         assert readout_mode in ("concat", "sum", "last"), \
             f"readout_mode must be 'concat', 'sum', or 'last', got {readout_mode!r}"
         self.readout_mode = readout_mode
+        if ct_edge_mode not in {"full", "none"}:
+            raise ValueError("ct_edge_mode must be 'full' or 'none'")
+        self.ct_edge_mode = ct_edge_mode
+        self.remove_los_edge = bool(remove_los_edge)
 
         self.col_list, self.col_dims, self.ad_col_index, self.dis_col_index = col_info
         self.register_buffer("col_dims_t", torch.tensor(self.col_dims, dtype=torch.long))
@@ -548,6 +554,8 @@ class CTMPGIN(nn.Module):
     def _build_edge_index_2(
         self, edge_index: torch.Tensor, num_nodes: int, batch_size: int
     ) -> torch.Tensor:
+        if self.ct_edge_mode == "none":
+            return edge_index
         if self._is_shared_pair_edge(edge_index, num_nodes):
             start_node = torch.arange(0, num_nodes, device=edge_index.device)
             end_node = start_node + num_nodes
@@ -576,6 +584,15 @@ class CTMPGIN(nn.Module):
         device     = edge_index.device
         E_internal = edge_index.size(1)
         los_table = self._cross_temporal_los_embedding_table().to(device=device)
+
+        if self.remove_los_edge:
+            if self._is_shared_pair_edge(edge_index, num_nodes):
+                return torch.zeros(
+                    (batch_size, E_internal + num_nodes, self.los_embedding_dim),
+                    device=device,
+                    dtype=los_table.dtype,
+                )
+            return torch.zeros((E_internal + num_nodes * batch_size, self.los_embedding_dim), device=device, dtype=los_table.dtype)
 
         # Internal edges → NONE token (index 0), no-copy expand
         none_emb           = los_table[0]                                            # (D,)

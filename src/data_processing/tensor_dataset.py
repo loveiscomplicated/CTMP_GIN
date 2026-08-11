@@ -36,6 +36,9 @@ class TEDSTensorDataset(Dataset):
         remove_los=True,
         do_preprocess=False,
         admission_only=False,
+        codebook_path=None,
+        discharge_only=False,
+        los_as_node=False,
     ):
         """
         Constructor for the TEDSTensorDataset.
@@ -53,11 +56,16 @@ class TEDSTensorDataset(Dataset):
         self.binary = binary
         self.ig_label = ig_label
         self.admission_only = admission_only
+        self.discharge_only = discharge_only
+        self.los_as_node = los_as_node
+        if self.los_as_node:
+            remove_los = False
         if admission_only:
             remove_los = True  # LOS is a discharge-time metric
         self.remove_los = remove_los
         self.root = root
         self.do_preprocess = do_preprocess
+        self.codebook_path = codebook_path
         self.raw_data_path = os.path.join(self.root, "raw", "TEDS_Discharge.csv")
 
         self.missing_corrected_path = os.path.join(
@@ -98,12 +106,16 @@ class TEDSTensorDataset(Dataset):
             remove_los=self.remove_los,
             do_preprocess=self.do_preprocess,
             admission_only=self.admission_only,
+            discharge_only=self.discharge_only,
+            los_as_node=self.los_as_node,
+            codebook_path=self.codebook_path,
         )
 
         self.processed_df = bundle.processed_df
         self.num_classes = bundle.num_classes
         self.raw_row_index = bundle.raw_row_index.reset_index(drop=True)
         self.caseid_series = None if bundle.caseid_series is None else bundle.caseid_series.reset_index(drop=True)
+        self.codebook_report = bundle.codebook_report
         los_tensor = bundle.los_encoded_tensor if not self.remove_los else bundle.los_raw_tensor
         if los_tensor.numel() > 0:
             los_min = int(los_tensor.min().item())

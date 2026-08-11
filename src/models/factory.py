@@ -57,6 +57,7 @@ def build_edge(model_name: str,
                                     n_neighbors=kwargs.get('n_neighbors', None),
                                     cache_path=kwargs.get('cache_path', None),
                                     remove_los=kwargs.get("remove_los", True),
+                                    score_method=kwargs.get("score_method", "raw_mi"),
                                     )
     else:
         mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict = cv_mi_dict(root=root,
@@ -64,6 +65,7 @@ def build_edge(model_name: str,
                             train_df=train_df,
                             n_neighbors=kwargs.get('n_neighbors', None),
                             remove_los=kwargs.get("remove_los", True),
+                            score_method=kwargs.get("score_method", "raw_mi"),
                             )
 
     if model_name in ["a3tgcn", "a3tgcn_2_points"]:

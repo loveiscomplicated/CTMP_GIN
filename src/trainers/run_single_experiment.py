@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from src.data_processing.tensor_dataset import TEDSTensorDataset
 from src.data_processing.data_utils import train_test_split_stratified
+from src.data_processing.splits import make_loaders
 from src.models.factory import build_model, build_edge
 from src.trainers.base import run_train_loop
 from src.utils.experiment import make_run_id, ensure_run_dir, ExperimentLogger
@@ -16,11 +17,13 @@ def run_single_experiment(cfg,
                           **kwargs):
     report_metric = kwargs.get("report_metric", "valid_auc")
     trial = kwargs.get("trial", None)
+    suppress_logger = bool(kwargs.get("suppress_logger", False))
     mi_cache_path = kwargs.get("mi_cache_path", None)
+    fixed_split_indices = kwargs.get("split_indices", None)
     # mi_cached=kwargs.get("mi_cached", True)
 
     logger = None
-    if trial is None: # if not parameter searching (normal training session)
+    if trial is None and not suppress_logger: # normal standalone run
         run_id = make_run_id(cfg)
         run_dir = ensure_run_dir("runs", run_id)
         logger = ExperimentLogger(cfg, run_dir) # if parameter searching, turn off the logger
@@ -33,9 +36,11 @@ def run_single_experiment(cfg,
     device = device_set(cfg["device"])
 
     admission_only = cfg.get("admission_only", False)
+    discharge_only = cfg.get("discharge_only", False)
+    los_as_node = cfg.get("los_as_node", False)
 
     remove_los = True
-    if not admission_only and cfg["model"]["name"] in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]:
+    if not los_as_node and not admission_only and (discharge_only or cfg["model"]["name"] in ["gin", "a3tgcn_2_points", "gin_gru_2_points"]):
         remove_los = False # include LOS in calculating MI
         cfg["edge"]["remove_los"] = False
 
@@ -47,6 +52,9 @@ def run_single_experiment(cfg,
         remove_los=remove_los,
         do_preprocess=cfg["train"].get("do_preprocess", True),
         admission_only=admission_only,
+        discharge_only=discharge_only,
+        los_as_node=los_as_node,
+        codebook_path=cfg.get("codebook_path") or cfg.get("data", {}).get("codebook_path"),
     )
 
     cfg["model"]["params"]["col_info"] = dataset.col_info
@@ -67,16 +75,36 @@ def run_single_experiment(cfg,
     split_ratio = [cfg['train']['train_ratio'], cfg['train']['val_ratio'], cfg['train']['test_ratio']]
     requires_fixed_batch_edge = cfg["model"]["name"] in ["gin_gru"]
     drop_last = bool(cfg["train"].get("drop_last", requires_fixed_batch_edge))
-    train_loader, val_loader, test_loader, idx = train_test_split_stratified(dataset=dataset,  # type: ignore
-                                                                                   batch_size=cfg['train']['batch_size'],
-                                                                                   ratio=split_ratio,
-                                                                                   seed=split_seed,
-                                                                                   num_workers=cfg['train']['num_workers'],
-                                                                                   drop_last=drop_last,
-                                                                                   pin_memory=bool(cfg["train"].get("pin_memory", device.type == "cuda")),
-                                                                                   persistent_workers=cfg["train"].get("persistent_workers", None),
-                                                                                   prefetch_factor=cfg["train"].get("prefetch_factor", None),
-                                                                                   )
+    if fixed_split_indices is None:
+        train_loader, val_loader, test_loader, idx = train_test_split_stratified(
+            dataset=dataset,
+            batch_size=cfg['train']['batch_size'],
+            ratio=split_ratio,
+            seed=split_seed,
+            num_workers=cfg['train']['num_workers'],
+            drop_last=drop_last,
+            eval_drop_last=cfg['train'].get("eval_drop_last", None),
+            pin_memory=bool(cfg["train"].get("pin_memory", device.type == "cuda")),
+            persistent_workers=cfg["train"].get("persistent_workers", None),
+            prefetch_factor=cfg["train"].get("prefetch_factor", None),
+        )
+    else:
+        if len(fixed_split_indices) != 3:
+            raise ValueError("split_indices must contain train, val, and test indices")
+        idx = tuple(np.asarray(part, dtype=np.int64) for part in fixed_split_indices)
+        train_loader, val_loader, test_loader = make_loaders(
+            dataset=dataset,
+            train_idx=idx[0],
+            val_idx=idx[1],
+            test_idx=idx[2],
+            batch_size=cfg['train']['batch_size'],
+            num_workers=cfg['train']['num_workers'],
+            drop_last=drop_last,
+            eval_drop_last=cfg['train'].get("eval_drop_last", False),
+            pin_memory=bool(cfg["train"].get("pin_memory", device.type == "cuda")),
+            persistent_workers=cfg["train"].get("persistent_workers", None),
+            prefetch_factor=cfg["train"].get("prefetch_factor", None),
+        )
     # split 완료 후 model seed 적용 (model 초기화/dropout 등에 영향)
     set_seed(model_seed)
     
@@ -126,7 +154,7 @@ def run_single_experiment(cfg,
         compile_mode = cfg["train"].get("compile_mode", "default")
         model = torch.compile(model, mode=compile_mode)
 
-    if trial is None:
+    if trial is None and not suppress_logger:
         print(model)
         print(f"학습 가능한 파라미터 개수: {total_trainable_params:,}")
         print(f'edge index shape: {tuple(edge_index.shape)}')

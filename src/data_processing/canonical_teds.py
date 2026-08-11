@@ -35,6 +35,7 @@ class CanonicalTEDSBundle:
     los_num_classes: int
     raw_row_index: pd.Series
     caseid_series: pd.Series | None
+    codebook_report: dict[str, Any] | None = None
 
     def schema_metadata(self) -> dict[str, Any]:
         col_list, col_dims, ad_col_index, dis_col_index = self.col_info
@@ -74,6 +75,9 @@ def _cache_path(
     remove_los: bool,
     do_preprocess: bool,
     admission_only: bool,
+    discharge_only: bool,
+    los_as_node: bool,
+    codebook_path: str | None,
 ) -> str:
     raw_data_path = os.path.join(root, "raw", "TEDS_Discharge.csv")
     missing_corrected_path = os.path.join(root, "raw", "missing_corrected.csv")
@@ -85,6 +89,9 @@ def _cache_path(
         "remove_los": bool(remove_los),
         "do_preprocess": bool(do_preprocess),
         "admission_only": bool(admission_only),
+        "discharge_only": bool(discharge_only),
+        "los_as_node": bool(los_as_node),
+        "codebook": _file_signature(codebook_path) if codebook_path else None,
         "source": _file_signature(source_path),
     }
     key = hashlib.blake2b(json.dumps(payload, sort_keys=True).encode("utf-8"), digest_size=12).hexdigest()
@@ -119,6 +126,9 @@ def build_canonical_teds_bundle(
     remove_los: bool = True,
     do_preprocess: bool = False,
     admission_only: bool = False,
+    discharge_only: bool = False,
+    los_as_node: bool = False,
+    codebook_path: str | None = None,
 ) -> CanonicalTEDSBundle:
     cache_path = _cache_path(
         root,
@@ -127,6 +137,9 @@ def build_canonical_teds_bundle(
         remove_los=remove_los,
         do_preprocess=do_preprocess,
         admission_only=admission_only,
+        discharge_only=discharge_only,
+        los_as_node=los_as_node,
+        codebook_path=codebook_path,
     )
     cached = _load_bundle_cache(cache_path)
     if cached is not None:
@@ -160,13 +173,25 @@ def build_canonical_teds_bundle(
     if "LOS" not in base_df.columns:
         raise ValueError("No LOS variable in the raw data.")
 
-    encoded_full_df = organize_labels(base_df.copy(), ig_label)
+    codebook_report = None
+    if codebook_path:
+        from src.protocol.vocabulary import encode_with_codebook, load_codebook
+
+        codebook = load_codebook(codebook_path)
+        encoded_full_df, oov_counts = encode_with_codebook(base_df.copy(), codebook)
+        codebook_report = {
+            "path": os.path.abspath(codebook_path),
+            "oov_counts": oov_counts,
+            "oov_total": int(sum(oov_counts.values())),
+        }
+    else:
+        encoded_full_df = organize_labels(base_df.copy(), ig_label)
     los_raw_tensor = df_to_tensor(base_df["LOS"])
     los_encoded_tensor = df_to_tensor(encoded_full_df["LOS"])
     y_tensor = df_to_tensor(encoded_full_df[label_col]).unsqueeze(1)
     num_classes = int(encoded_full_df[label_col].nunique())
 
-    feature_df = base_df.copy()
+    feature_df = encoded_full_df.copy()
     if remove_los and "LOS" in feature_df.columns:
         feature_df = feature_df.drop("LOS", axis=1)
     if admission_only:
@@ -174,6 +199,11 @@ def build_canonical_teds_bundle(
         feature_df = feature_df.drop(columns=dis_cols)
         if "LOS" in feature_df.columns:
             feature_df = feature_df.drop("LOS", axis=1)
+    if discharge_only:
+        discharge_cols = [c for c in feature_df.columns if c.endswith("_D")]
+        keep = discharge_cols + (["LOS"] if "LOS" in feature_df.columns else [])
+        feature_df = feature_df.loc[:, [c for c in keep if c in feature_df.columns]]
+        feature_df = feature_df.rename(columns={c: c[:-2] for c in discharge_cols})
     processed_df = feature_df.copy()
 
     encoded_feature_df = encoded_full_df.copy()
@@ -184,6 +214,11 @@ def build_canonical_teds_bundle(
         encoded_feature_df = encoded_feature_df.drop(columns=dis_cols)
         if "LOS" in encoded_feature_df.columns:
             encoded_feature_df = encoded_feature_df.drop("LOS", axis=1)
+    if discharge_only:
+        discharge_cols = [c for c in encoded_feature_df.columns if c.endswith("_D")]
+        keep = discharge_cols + (["LOS"] if "LOS" in encoded_feature_df.columns else [])
+        encoded_feature_df = encoded_feature_df.loc[:, [c for c in keep if c in encoded_feature_df.columns]]
+        encoded_feature_df = encoded_feature_df.rename(columns={c: c[:-2] for c in discharge_cols})
 
     if label_col in encoded_feature_df.columns:
         encoded_feature_df = encoded_feature_df.drop(label_col, axis=1)
@@ -193,7 +228,8 @@ def build_canonical_teds_bundle(
         encoded_feature_df["LOS"] = los_col
 
     col_info = get_col_info(encoded_feature_df, remove_los=remove_los, ig_label=ig_label)
-    x_tensor = df_to_tensor(encoded_feature_df.drop("LOS", axis=1, errors="ignore"))
+    x_source = encoded_feature_df if los_as_node else encoded_feature_df.drop("LOS", axis=1, errors="ignore")
+    x_tensor = df_to_tensor(x_source)
 
     col_list, col_dims, ad_col_index, _ = col_info
     admission_col_names = [str(col_list[idx]) for idx in ad_col_index]
@@ -219,6 +255,7 @@ def build_canonical_teds_bundle(
         los_num_classes=los_num_classes,
         raw_row_index=raw_row_index,
         caseid_series=caseid_series,
+        codebook_report=codebook_report,
     )
     _save_bundle_cache(cache_path, bundle)
     return bundle

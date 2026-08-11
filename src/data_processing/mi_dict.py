@@ -6,6 +6,7 @@ from tqdm import tqdm
 import pandas as pd
 from sklearn.feature_selection import mutual_info_classif
 from .data_utils import get_ad_dis_col
+from src.protocol.mi import load_or_compute_mi
 
 def _remove_target(df: pd.DataFrame):
     cols = [col for col in df.columns if col not in {"REASON", "REASONb"}]
@@ -30,12 +31,12 @@ def _train_df_fingerprint(df: pd.DataFrame) -> str:
     h.update(index_hash.tobytes())
     return h.hexdigest()
 
-def _mi_cache_path(root: str, seed: int, train_df: pd.DataFrame, remove_los: bool) -> str:
+def _mi_cache_path(root: str, seed: int, train_df: pd.DataFrame, remove_los: bool = True) -> str:
     cache_key = _train_df_fingerprint(train_df)
     return os.path.join(
         root,
         "mi",
-        f"mi_dict_seed_{seed}_remove_los_{remove_los}_split_{cache_key}.pickle",
+        f"mi_dict_seed_{seed}_split_{cache_key}.pickle",
     )
 
 def _get_mi_helper(df: pd.DataFrame, seed: int, n_neighbors: int | None = None):
@@ -173,7 +174,7 @@ def seperate_ad_dis(mi_dict: dict, ad_col_list, dis_col_list):
     return mi_ad_dict, mi_dis_dict, mi_avg_dict
 
 
-def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=None, remove_los=True, cache_path: str | None = None):
+def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=None, remove_los=True, cache_path: str | None = None, score_method: str = "raw_mi"):
     """
     Load cached MI results or compute them, then split by admission/discharge.
 
@@ -191,8 +192,16 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=Non
     print("Buliding Edge Index Based on Mutual Information")
     mi_dict = None
 
+    if cache_path is None and score_method in {"raw_mi", "nmi"}:
+        mi_dict, _ = load_or_compute_mi(
+            root,
+            _remove_target(train_df),
+            score_method=score_method,
+            seed=seed,
+        )
+
     # 1. Prioritize loading from the user-specified path (cache_path)
-    if cache_path is not None:
+    if mi_dict is None and cache_path is not None:
         try:
             print("Loading cached file...")
             with open(cache_path, 'rb') as f:
@@ -224,7 +233,7 @@ def search_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=Non
     return mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict
 
 
-def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=None, remove_los=True):
+def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=None, remove_los=True, score_method: str = "raw_mi"):
     """
     calculate mi_dict every time.
     Args:
@@ -237,6 +246,16 @@ def cv_mi_dict(root: str, seed: int, train_df: pd.DataFrame, n_neighbors=None, r
         tuple: (mi_ad_dict, mi_dis_dict, mi_avg_dict)
     """
     print("Buliding Mutual Information based edge index")
+    if score_method in {"raw_mi", "nmi"}:
+        mi_dict, _ = load_or_compute_mi(
+            root,
+            _remove_target(train_df),
+            score_method=score_method,
+            seed=seed,
+        )
+        ad_col_list, dis_col_list = get_ad_dis_col(df=train_df, remove_los=remove_los)
+        mi_ad_dict, mi_dis_dict, mi_avg_dict = seperate_ad_dis(mi_dict, ad_col_list, dis_col_list)
+        return mi_ad_dict, mi_dis_dict, mi_avg_dict, mi_dict
     mi_dict_path = _mi_cache_path(root=root, seed=seed, train_df=train_df, remove_los=remove_los)
     if os.path.exists(mi_dict_path):
         print("Loading cached file...")
