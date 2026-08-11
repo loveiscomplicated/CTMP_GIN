@@ -64,9 +64,7 @@ def suggest_ctmp_gin_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float(
         "weight_decay", 1e-6, 5e-4, log=True
     )
-    cfg["train"]["optimizer"] = trial.suggest_categorical(
-        "optimizer", ["adam", "adamw"]
-    )
+    cfg["train"]["optimizer"] = "adamw"
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical(
         "lr_scheduler_patience", [2, 5, 8]
     )
@@ -104,9 +102,7 @@ def suggest_gin_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float(
         "weight_decay", 1e-6, 5e-4, log=True
     )
-    cfg["train"]["optimizer"] = trial.suggest_categorical(
-        "optimizer", ["adam", "adamw"]
-    )
+    cfg["train"]["optimizer"] = "adamw"
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical(
         "lr_scheduler_patience", [2, 5, 8]
     )
@@ -138,9 +134,7 @@ def suggest_a3tgcn_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float(
         "weight_decay", 1e-6, 5e-4, log=True
     )
-    cfg["train"]["optimizer"] = trial.suggest_categorical(
-        "optimizer", ["adam", "adamw"]
-    )
+    cfg["train"]["optimizer"] = "adamw"
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical(
         "lr_scheduler_patience", [2, 5, 8]
     )
@@ -172,9 +166,7 @@ def suggest_a3tgcn_2_points_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float(
         "weight_decay", 1e-6, 5e-4, log=True
     )
-    cfg["train"]["optimizer"] = trial.suggest_categorical(
-        "optimizer", ["adam", "adamw"]
-    )
+    cfg["train"]["optimizer"] = "adamw"
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical(
         "lr_scheduler_patience", [2, 5, 8]
     )
@@ -215,9 +207,7 @@ def suggest_gin_gru_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float(
         "weight_decay", 1e-6, 5e-4, log=True
     )
-    cfg["train"]["optimizer"] = trial.suggest_categorical(
-        "optimizer", ["adam", "adamw"]
-    )
+    cfg["train"]["optimizer"] = "adamw"
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical(
         "lr_scheduler_patience", [2, 5, 8]
     )
@@ -264,9 +254,7 @@ def suggest_gin_gru_2_points_params(trial, cfg):
     cfg["train"]["weight_decay"] = trial.suggest_float(
         "weight_decay", 1e-6, 5e-4, log=True
     )
-    cfg["train"]["optimizer"] = trial.suggest_categorical(
-        "optimizer", ["adam", "adamw"]
-    )
+    cfg["train"]["optimizer"] = "adamw"
     cfg["train"]["lr_scheduler_patience"] = trial.suggest_categorical(
         "lr_scheduler_patience", [2, 5, 8]
     )
