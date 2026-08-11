@@ -25,7 +25,7 @@ from .graph_config import hub_concentration, load_graph_config, write_graph_conf
 from .hpo import apply_trial_params, suggest_protocol_params
 from .preflight import run_preflight
 from .analysis import analyze_paired_results
-from .ablations import apply_variant
+from .ablations import VARIANTS, apply_variant
 
 
 def _write(path: Path, payload: Any) -> None:
@@ -36,6 +36,21 @@ def _write(path: Path, payload: Any) -> None:
 def _load_cfg(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def _resolve_codebook_path(cfg: dict[str, Any]) -> str | None:
+    return cfg.get("codebook_path") or (cfg.get("data") or {}).get("codebook_path")
+
+
+def _require_protocol_codebook(cfg: dict[str, Any], stage: str) -> None:
+    if stage == "analyze":
+        return
+    codebook_path = _resolve_codebook_path(cfg)
+    if not codebook_path:
+        raise SystemExit("--codebook is required for protocol stages that build datasets")
+    if not Path(codebook_path).exists():
+        raise SystemExit(f"codebook does not exist: {codebook_path}")
+    cfg["codebook_path"] = codebook_path
 
 
 def _dataset(cfg: dict[str, Any], root: str):
@@ -53,7 +68,7 @@ def _dataset(cfg: dict[str, Any], root: str):
         admission_only=admission_only,
         discharge_only=discharge_only,
         los_as_node=los_as_node,
-        codebook_path=cfg.get("codebook_path") or cfg.get("data", {}).get("codebook_path"),
+        codebook_path=cfg.get("codebook_path") or (cfg.get("data") or {}).get("codebook_path"),
     )
     labels = np.asarray([int(dataset[index][1]) for index in range(len(dataset))], dtype=np.int64)
     return dataset, labels
@@ -265,7 +280,7 @@ def run_graph_pilot(cfg: dict[str, Any], root: str, run_dir: str, n_trials: int 
             "hub_concentration": best.user_attrs.get("hub_concentration", 0.0),
         })
     # AUC wins when the arms differ by more than the protocol tolerance. If tied,
-    # retain the raw arm as the deterministic fallback until hub metrics are added.
+    # prefer the graph with lower hub concentration to reduce cardinality bias.
     pilot_results.sort(key=lambda item: float(item["value"]), reverse=True)
     selected = pilot_results[0]
     if len(pilot_results) == 2 and abs(float(pilot_results[0]["value"]) - float(pilot_results[1]["value"])) <= 0.002:
@@ -337,8 +352,7 @@ def main() -> None:
         if not Path(args.codebook).exists():
             raise SystemExit(f"codebook does not exist: {args.codebook}")
         cfg["codebook_path"] = args.codebook
-    if args.stage in {"preflight", "prepare"} and not cfg.get("codebook_path"):
-        raise SystemExit("--codebook is required for protocol preflight/prepare")
+    _require_protocol_codebook(cfg, args.stage)
     if args.stage == "preflight":
         _, labels = _dataset(cfg, args.root)
         run_preflight(args.run_dir, labels, require_graph=Path(args.run_dir, "graph_config.json").exists())
@@ -353,6 +367,8 @@ def main() -> None:
     elif args.stage == "ablation-hpo":
         if not args.graph_config or not args.variant or args.variant == "full":
             raise SystemExit("--graph-config and a non-full --variant are required for ablation-hpo")
+        if not VARIANTS[args.variant].get("hpo", False):
+            raise SystemExit(f"{args.variant} uses inherited HPO; run ablation-evaluate instead")
         warm_start = load_json(args.warm_start)["params"] if args.warm_start else None
         variant_cfg = apply_variant(cfg, args.variant)
         run_hpo(variant_cfg, args.root, args.run_dir, args.graph_config, args.n_trials if args.n_trials != 100 else 40, args.study_name or f"{cfg['model']['name']}_{args.variant}", warm_start)

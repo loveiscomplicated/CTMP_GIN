@@ -1,9 +1,12 @@
 import os
+import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from src.data_processing.tensor_dataset import TEDSTensorDataset
 from src.data_processing.data_utils import train_test_split_stratified
+from src.data_processing.data_utils import _loader_runtime_kwargs
 from src.data_processing.splits import make_loaders
 from src.models.factory import build_model, build_edge
 from src.trainers.base import run_train_loop
@@ -11,6 +14,60 @@ from src.utils.experiment import make_run_id, ensure_run_dir, ExperimentLogger
 from src.utils.seed_set import set_seed
 from src.utils.device_set import device_set
 from src.trainers.utils.early_stopper import EarlyStopper
+
+
+class _LOSOverrideSubset(Dataset):
+    def __init__(self, dataset, indices, los_values):
+        self.dataset = dataset
+        self.indices = np.asarray(indices, dtype=np.int64)
+        self.los_values = torch.as_tensor(los_values, dtype=torch.long)
+        if len(self.indices) != len(self.los_values):
+            raise ValueError("indices and los_values must have the same length")
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, position):
+        x, y, _ = self.dataset[int(self.indices[position])]
+        return x, y, self.los_values[position]
+
+
+def _make_los_shuffle_loaders(dataset, test_idx, cfg, device):
+    evaluation_cfg = cfg.get("evaluation", {})
+    repetitions = int(evaluation_cfg.get("los_shuffle_repetitions", 0) or 0)
+    if repetitions <= 0:
+        return []
+
+    test_idx = np.asarray(test_idx, dtype=np.int64)
+    original_los = np.asarray([int(dataset[int(index)][2]) for index in test_idx], dtype=np.int64)
+    base_seed = int(evaluation_cfg.get("los_shuffle_seed", cfg.get("train", {}).get("seed", 42)))
+    eval_drop_last = cfg["train"].get("eval_drop_last", False)
+    if eval_drop_last is None:
+        eval_drop_last = bool(cfg["train"].get("drop_last", False))
+    loader_kwargs = _loader_runtime_kwargs(
+        num_workers=cfg["train"]["num_workers"],
+        pin_memory=bool(cfg["train"].get("pin_memory", device.type == "cuda")),
+        persistent_workers=cfg["train"].get("persistent_workers", None),
+        prefetch_factor=cfg["train"].get("prefetch_factor", None),
+    )
+
+    loaders = []
+    for rep in range(repetitions):
+        shuffled = original_los.copy()
+        np.random.default_rng(base_seed + rep).shuffle(shuffled)
+        loaders.append({
+            "name": f"los_shuffled_{rep + 1}",
+            "loader": DataLoader(
+                _LOSOverrideSubset(dataset, test_idx, shuffled),
+                batch_size=cfg["train"]["batch_size"],
+                shuffle=False,
+                drop_last=eval_drop_last,
+                **loader_kwargs,
+            ),
+            "seed": base_seed + rep,
+        })
+    return loaders
+
 
 def run_single_experiment(cfg, 
                           root,
@@ -54,7 +111,7 @@ def run_single_experiment(cfg,
         admission_only=admission_only,
         discharge_only=discharge_only,
         los_as_node=los_as_node,
-        codebook_path=cfg.get("codebook_path") or cfg.get("data", {}).get("codebook_path"),
+        codebook_path=cfg.get("codebook_path") or (cfg.get("data") or {}).get("codebook_path"),
     )
 
     cfg["model"]["params"]["col_info"] = dataset.col_info
@@ -117,6 +174,8 @@ def run_single_experiment(cfg,
     
     if cfg["model"]["name"] in ["a3tgcn", "a3tgcn_2_points"]:
         cfg["model"]["params"]["batch_size"] = cfg["train"].get("batch_size", 32)
+
+    extra_test_loaders = _make_los_shuffle_loaders(dataset, idx[2], cfg, device)
 
     # build model
     model = build_model(
@@ -208,6 +267,8 @@ def run_single_experiment(cfg,
         amp=cfg["train"].get("amp", device.type == "cuda"),
         tf32=cfg["train"].get("tf32", device.type == "cuda"),
         disable_tqdm=cfg["train"].get("disable_tqdm", False),
+        extra_test_loaders=extra_test_loaders,
+        use_extra_test_mean_as_primary=bool(cfg.get("evaluation", {}).get("use_los_shuffle_as_primary", False)),
     )
 
     return out

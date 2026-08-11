@@ -22,6 +22,21 @@ project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root.parent))
 
 
+def _clone_state_dict_to_cpu(model):
+    return {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+
+
+def _metrics_dict(prefix, loss, accuracy, precision, recall, f1, auc):
+    return {
+        f"{prefix}_loss": float(loss),
+        f"{prefix}_acc": float(accuracy),
+        f"{prefix}_precision": float(precision),
+        f"{prefix}_recall": float(recall),
+        f"{prefix}_f1": float(f1),
+        f"{prefix}_auc": float(auc),
+    }
+
+
 def train(
     model,
     dataloader,
@@ -261,6 +276,7 @@ def run_train_loop(
     best_val = -float("inf")
     best_epoch = None
     best_val_metrics = None
+    best_model_state = None
     if logger is not None and getattr(logger, "best_value", None) is not None:
         best_val = float(logger.best_value)
         best_epoch = logger.best_epoch
@@ -311,6 +327,8 @@ def run_train_loop(
             best_val = cur_obj
             best_epoch = epoch
             best_val_metrics = dict(metrics)
+            if trial is None and logger is None:
+                best_model_state = _clone_state_dict_to_cpu(model)
 
         # [ADD] Optuna report + prune
         if trial is not None:
@@ -363,6 +381,15 @@ def run_train_loop(
             model.load_state_dict(ckpt["model_state_dict"])
             model.eval()
             print(f"  Reloaded best.pt (epoch={logger.best_epoch}) for test evaluation")
+    elif best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        model.to(device)
+        model.eval()
+        print(f"  Restored in-memory best weights (epoch={best_epoch}) for test evaluation")
+
+    extra_test_results = []
+    primary_reference = None
+    stds = {}
 
     if trial is not None:
         # Optuna HPO 중에는 test evaluation skip (불필요한 연산 절감)
@@ -374,6 +401,37 @@ def run_train_loop(
                 amp_enabled=amp_enabled, disable_tqdm=disable_tqdm,
             )
 
+        for extra in kwargs.get("extra_test_loaders", []) or []:
+            with torch.no_grad():
+                metrics_tuple = evaluate(
+                    model, extra["loader"], criterion, decision_threshold, device, binary, edge_index,
+                    amp_enabled=amp_enabled, disable_tqdm=disable_tqdm,
+                )
+            extra_test_results.append({
+                "name": extra.get("name"),
+                "seed": extra.get("seed"),
+                **_metrics_dict("test", *metrics_tuple),
+            })
+
+        if extra_test_results and bool(kwargs.get("use_extra_test_mean_as_primary", False)):
+            primary_reference = _metrics_dict(
+                "test_reference",
+                test_loss,
+                test_accuracy,
+                test_precision,
+                test_recall,
+                test_f1,
+                test_auc,
+            )
+            metric_names = ["test_loss", "test_acc", "test_precision", "test_recall", "test_f1", "test_auc"]
+            means = {name: float(np.mean([item[name] for item in extra_test_results])) for name in metric_names}
+            stds = {f"{name}_std": float(np.std([item[name] for item in extra_test_results], ddof=1)) if len(extra_test_results) > 1 else 0.0 for name in metric_names}
+            test_loss = means["test_loss"]
+            test_accuracy = means["test_acc"]
+            test_precision = means["test_precision"]
+            test_recall = means["test_recall"]
+            test_f1 = means["test_f1"]
+            test_auc = means["test_auc"]
         result_str = f"\n[Test] Model: {MODEL_NAME} Loss: {test_loss:.4f} | Acc: {test_accuracy:.4f}, Prec: {test_precision:.4f}, Rec: {test_recall:.4f}, F1: {test_f1:.4f}, AUC: {test_auc:.4f}"
         print(result_str)
         send_discord_message(result_str)
@@ -399,4 +457,7 @@ def run_train_loop(
         "test_recall": float(test_recall),
         "test_f1": float(test_f1),
         "test_auc": float(test_auc),
+        **stds,
+        "test_reference_metrics": primary_reference,
+        "extra_test_results": extra_test_results if trial is None else [],
     }

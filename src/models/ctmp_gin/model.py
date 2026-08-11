@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -65,28 +65,36 @@ def pair_x(x: torch.Tensor, ad_idx_t: torch.Tensor, dis_idx_t: torch.Tensor) -> 
 # ---------------------------------------------------------------------------
 
 class GatedFusion(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, hidden_dim: Optional[int] = None, dropout: float = 0.0):
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        hidden_dim: Optional[int] = None,
+        dropout: float = 0.0,
+        num_streams: int = 3,
+    ):
         super().__init__()
         hidden_dim = hidden_dim or in_dim
+        self.num_streams = int(num_streams)
         self.score = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 3),
+            nn.Linear(hidden_dim, self.num_streams),
         )
         self.dropout = nn.Dropout(dropout)
         self.out_dim = out_dim
 
     def forward(
-        self, A: torch.Tensor, B: torch.Tensor, C: torch.Tensor
+        self, *streams: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x      = torch.cat([A, B, C], dim=-1)   # [B, 3*d]
-        logits = self.score(x)                  # [B, 3]
-        w      = F.softmax(logits, dim=-1)       # [B, 3]
-        A = self.dropout(A)
-        B = self.dropout(B)
-        C = self.dropout(C)
-        fused = w[:, 0:1] * A + w[:, 1:2] * B + w[:, 2:3] * C
+        if len(streams) != self.num_streams:
+            raise ValueError(f"expected {self.num_streams} fusion streams, got {len(streams)}")
+        x = torch.cat(list(streams), dim=-1)
+        logits = self.score(x)
+        w = F.softmax(logits, dim=-1)
+        dropped = [self.dropout(stream) for stream in streams]
+        fused = sum(w[:, index:index + 1] * stream for index, stream in enumerate(dropped))
         return fused, w, logits
 
 
@@ -95,6 +103,9 @@ class GatedFusion(nn.Module):
 # ---------------------------------------------------------------------------
 
 ReadoutMode = Literal["concat", "sum", "last"]
+CTEdgeMode = Literal["forward", "none", "bidirectional"]
+InterEdgeFeatureMode = Literal["los", "zero"]
+FusionStream = Literal["ad", "dis", "merged"]
 
 
 class CTMPGIN(nn.Module):
@@ -126,7 +137,9 @@ class CTMPGIN(nn.Module):
         remove_all_proj: bool = False,
         remove_gated_fusion: bool = False,
         readout_mode: ReadoutMode = "concat",
-        ct_edge_mode: str = "full",
+        ct_edge_mode: str = "forward",
+        inter_edge_feature_mode: str = "los",
+        fusion_stream_mask: Optional[Sequence[str] | str] = None,
         remove_los_edge: bool = False,
         **kwargs,
     ):
@@ -148,10 +161,21 @@ class CTMPGIN(nn.Module):
         assert readout_mode in ("concat", "sum", "last"), \
             f"readout_mode must be 'concat', 'sum', or 'last', got {readout_mode!r}"
         self.readout_mode = readout_mode
-        if ct_edge_mode not in {"full", "none"}:
-            raise ValueError("ct_edge_mode must be 'full' or 'none'")
-        self.ct_edge_mode = ct_edge_mode
-        self.remove_los_edge = bool(remove_los_edge)
+        if ct_edge_mode == "full":
+            ct_edge_mode = "forward"
+        if ct_edge_mode not in {"forward", "none", "bidirectional"}:
+            raise ValueError("ct_edge_mode must be 'forward', 'none', or 'bidirectional'")
+        self.ct_edge_mode: CTEdgeMode = ct_edge_mode  # type: ignore[assignment]
+
+        if inter_edge_feature_mode == "none":
+            inter_edge_feature_mode = "zero"
+        if remove_los_edge:
+            inter_edge_feature_mode = "zero"
+        if inter_edge_feature_mode not in {"los", "zero"}:
+            raise ValueError("inter_edge_feature_mode must be 'los' or 'zero'")
+        self.inter_edge_feature_mode: InterEdgeFeatureMode = inter_edge_feature_mode  # type: ignore[assignment]
+        self.remove_los_edge = self.inter_edge_feature_mode == "zero"
+        self.fusion_stream_mask = self._normalize_fusion_stream_mask(fusion_stream_mask)
 
         self.col_list, self.col_dims, self.ad_col_index, self.dis_col_index = col_info
         self.register_buffer("col_dims_t", torch.tensor(self.col_dims, dtype=torch.long))
@@ -226,10 +250,11 @@ class CTMPGIN(nn.Module):
         self.remove_gated_fusion = remove_gated_fusion
         if not remove_gated_fusion:
             self.gated_fusion = GatedFusion(
-                in_dim=3 * self.fuse_dim,
+                in_dim=len(self.fusion_stream_mask) * self.fuse_dim,
                 out_dim=self.fuse_dim,
                 hidden_dim=gate_hidden_ch,
                 dropout=dropout_p,
+                num_streams=len(self.fusion_stream_mask),
             )
         else:
             print("gated_fusion removed...")
@@ -249,6 +274,27 @@ class CTMPGIN(nn.Module):
     # Construction helpers
     # ------------------------------------------------------------------
 
+    def _normalize_fusion_stream_mask(
+        self,
+        mask: Optional[Sequence[str] | str],
+    ) -> tuple[FusionStream, ...]:
+        if mask is None:
+            requested = ("ad", "dis", "merged")
+        elif isinstance(mask, str):
+            requested = tuple(part.strip() for part in mask.split(",") if part.strip())
+        else:
+            requested = tuple(mask)
+
+        allowed = {"ad", "dis", "merged"}
+        if not requested:
+            raise ValueError("fusion_stream_mask must include at least one stream")
+        if len(set(requested)) != len(requested):
+            raise ValueError(f"fusion_stream_mask contains duplicates: {requested!r}")
+        unknown = set(requested) - allowed
+        if unknown:
+            raise ValueError(f"unknown fusion streams: {sorted(unknown)}")
+        return requested  # type: ignore[return-value]
+
     def _build_gin_stack(
         self, conv_cls, in_dim: int, hidden_dim: int, num_layers: int, train_eps: bool, **conv_kwargs
     ) -> nn.ModuleList:
@@ -258,6 +304,26 @@ class CTMPGIN(nn.Module):
         for _ in range(num_layers - 1):
             layers.append(conv_cls(_make_gin_mlp(hidden_dim, hidden_dim), train_eps=train_eps, **conv_kwargs))
         return layers
+
+    def _select_fusion_streams(
+        self,
+        ad_f: torch.Tensor,
+        dis_f: torch.Tensor,
+        merged_f: torch.Tensor,
+    ) -> list[torch.Tensor]:
+        by_name = {"ad": ad_f, "dis": dis_f, "merged": merged_f}
+        return [by_name[name] for name in self.fusion_stream_mask]
+
+    def _fuse_streams(
+        self,
+        ad_f: torch.Tensor,
+        dis_f: torch.Tensor,
+        merged_f: torch.Tensor,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        streams = self._select_fusion_streams(ad_f, dis_f, merged_f)
+        if self.remove_gated_fusion:
+            return torch.stack(streams, dim=0).mean(dim=0), None, None
+        return self.gated_fusion(*streams)
 
     # ------------------------------------------------------------------
     # Core GIN runner with hierarchical readout
@@ -368,11 +434,7 @@ class CTMPGIN(nn.Module):
         merged_f = self.proj_merged(merged_readout)  # [B, d]
 
         # --- Fusion ---
-        if self.remove_gated_fusion:
-            fused = (ad_f + dis_f + merged_f) / 3.0
-            w = logits_gate = None
-        else:
-            fused, w, logits_gate = self.gated_fusion(ad_f, dis_f, merged_f)
+        fused, w, logits_gate = self._fuse_streams(ad_f, dis_f, merged_f)
 
         logit = self.classifier_b(fused)
 
@@ -416,11 +478,7 @@ class CTMPGIN(nn.Module):
         dis_f = self.proj_dis(dis_readout)
         merged_f = self.proj_merged(merged_readout)
 
-        if self.remove_gated_fusion:
-            fused = (ad_f + dis_f + merged_f) / 3.0
-            w = logits_gate = None
-        else:
-            fused, w, logits_gate = self.gated_fusion(ad_f, dis_f, merged_f)
+        fused, w, logits_gate = self._fuse_streams(ad_f, dis_f, merged_f)
 
         logit = self.classifier_b(fused)
 
@@ -556,16 +614,23 @@ class CTMPGIN(nn.Module):
     ) -> torch.Tensor:
         if self.ct_edge_mode == "none":
             return edge_index
+
         if self._is_shared_pair_edge(edge_index, num_nodes):
             start_node = torch.arange(0, num_nodes, device=edge_index.device)
             end_node = start_node + num_nodes
-            cross_edge_index = torch.stack([start_node, end_node], dim=0)
+            cross_edges = [torch.stack([start_node, end_node], dim=0)]
+            if self.ct_edge_mode == "bidirectional":
+                cross_edges.append(torch.stack([end_node, start_node], dim=0))
+            cross_edge_index = torch.cat(cross_edges, dim=1)
             return torch.cat([edge_index, cross_edge_index], dim=1)
 
         merged_num_nodes = num_nodes * batch_size
         start_node       = torch.arange(0, merged_num_nodes, device=edge_index.device)
         end_node         = start_node + merged_num_nodes
-        cross_edge_index = torch.stack([start_node, end_node], dim=0)
+        cross_edges = [torch.stack([start_node, end_node], dim=0)]
+        if self.ct_edge_mode == "bidirectional":
+            cross_edges.append(torch.stack([end_node, start_node], dim=0))
+        cross_edge_index = torch.cat(cross_edges, dim=1)
         return torch.cat([edge_index, cross_edge_index], dim=1)
 
     def get_edge_index_2(
@@ -584,28 +649,37 @@ class CTMPGIN(nn.Module):
         device     = edge_index.device
         E_internal = edge_index.size(1)
         los_table = self._cross_temporal_los_embedding_table().to(device=device)
+        shared_pair_edge = self._is_shared_pair_edge(edge_index, num_nodes)
+        directions = 0 if self.ct_edge_mode == "none" else (2 if self.ct_edge_mode == "bidirectional" else 1)
+        E_cross = num_nodes * directions if shared_pair_edge else num_nodes * batch_size * directions
 
-        if self.remove_los_edge:
-            if self._is_shared_pair_edge(edge_index, num_nodes):
+        if self.inter_edge_feature_mode == "zero":
+            if shared_pair_edge:
                 return torch.zeros(
-                    (batch_size, E_internal + num_nodes, self.los_embedding_dim),
+                    (batch_size, E_internal + E_cross, self.los_embedding_dim),
                     device=device,
                     dtype=los_table.dtype,
                 )
-            return torch.zeros((E_internal + num_nodes * batch_size, self.los_embedding_dim), device=device, dtype=los_table.dtype)
+            return torch.zeros((E_internal + E_cross, self.los_embedding_dim), device=device, dtype=los_table.dtype)
 
         # Internal edges → NONE token (index 0), no-copy expand
         none_emb           = los_table[0]                                            # (D,)
         edge_attr_internal = none_emb.unsqueeze(0).expand(E_internal, -1)           # (E_internal, D)
+        if E_cross == 0:
+            if shared_pair_edge:
+                return none_emb.view(1, 1, -1).expand(batch_size, E_internal, -1)
+            return edge_attr_internal
 
-        if self._is_shared_pair_edge(edge_index, num_nodes):
+        if shared_pair_edge:
             edge_attr_internal = none_emb.view(1, 1, -1).expand(batch_size, E_internal, -1)
             los_idx = los.view(batch_size).to(device).long()
-            edge_attr_cross = self.encode_los_indices(los_idx).unsqueeze(1).expand(-1, num_nodes, -1)
+            edge_attr_cross = self.encode_los_indices(los_idx).unsqueeze(1).expand(-1, num_nodes * directions, -1)
             return torch.cat([edge_attr_internal, edge_attr_cross], dim=1)
 
         # Cross edges use the observed LOS token in retrospective CTMP-GIN.
-        los_idx = los.view(batch_size).to(device).long().repeat_interleave(num_nodes)  # (B*N,)
+        los_idx = los.view(batch_size).to(device).long().repeat_interleave(num_nodes)
+        if directions == 2:
+            los_idx = torch.cat([los_idx, los_idx], dim=0)
         edge_attr_cross = self.encode_los_indices(los_idx)                            # (B*N, D)
 
         return torch.cat([edge_attr_internal, edge_attr_cross], dim=0)  # (E_total, D)

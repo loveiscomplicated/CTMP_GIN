@@ -15,6 +15,9 @@ VARIANTS = {
     "C1": {"name": "GIN admission-only", "hpo": True, "source": "gin"},
     "C3": {"name": "GIN discharge-only", "hpo": True, "source": "gin"},
     "xgboost_admission": {"name": "XGBoost admission-only", "hpo": True, "source": "xgboost"},
+    "B1": {"name": "bidirectional CT-edge", "hpo": False},
+    "B3": {"name": "w/o merged stream", "hpo": False},
+    "w/o_merged_stream": {"name": "w/o merged stream", "hpo": False},
     "w/o_gated_fusion": {"name": "w/o GatedFusion", "hpo": False},
     "w/o_mi_edge": {"name": "w/o MI edge", "hpo": False},
     "w/o_preprocessing": {"name": "w/o preprocessing", "hpo": False},
@@ -29,14 +32,23 @@ def apply_variant(cfg: dict[str, Any], variant: str) -> dict[str, Any]:
     if variant == "A1":
         model["ct_edge_mode"] = "none"
     elif variant == "A2":
+        model["inter_edge_feature_mode"] = "zero"
         model["remove_los_edge"] = True
     elif variant == "A3":
         result["los_as_node"] = True
+        model["inter_edge_feature_mode"] = "zero"
         model["remove_los_edge"] = True
+    elif variant == "A4":
+        result.setdefault("evaluation", {})["los_shuffle_repetitions"] = int(VARIANTS["A4"]["repetitions"])
+        result.setdefault("evaluation", {})["use_los_shuffle_as_primary"] = True
     elif variant == "C1" or variant == "xgboost_admission":
         result["admission_only"] = True
     elif variant == "C3":
         result["discharge_only"] = True
+    elif variant == "B1":
+        model["ct_edge_mode"] = "bidirectional"
+    elif variant in {"B3", "w/o_merged_stream"}:
+        model["fusion_stream_mask"] = ["ad", "dis"]
     elif variant == "w/o_gated_fusion":
         model["remove_gated_fusion"] = True
     elif variant == "w/o_mi_edge":

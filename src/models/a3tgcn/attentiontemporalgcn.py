@@ -121,7 +121,9 @@ class A3TGCN2(torch.nn.Module):
         improved: bool = False,
         cached: bool = False,
         add_self_loops: bool = True,
-        fuse_gates: bool = False):
+        fuse_gates: bool = False,
+        num_layers: int = 1,
+        dropout_p: float = 0.0):
         super(A3TGCN2, self).__init__()
 
         self.in_channels = in_channels  # 2
@@ -131,19 +133,28 @@ class A3TGCN2(torch.nn.Module):
         self.cached = cached
         self.add_self_loops = add_self_loops
         self.fuse_gates = bool(fuse_gates)
+        self.num_layers = int(num_layers)
+        if self.num_layers < 1:
+            raise ValueError(f"num_layers must be >= 1, got {num_layers}")
+        self.dropout_p = float(dropout_p)
         self.batch_size = batch_size
         self.device = device
         self._setup_layers()
 
     def _setup_layers(self):
-        self._base_tgcn = TGCN2(
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,  
-            batch_size=self.batch_size,
-            improved=self.improved,
-            cached=self.cached, 
-            add_self_loops=self.add_self_loops,
-            fuse_gates=self.fuse_gates)
+        self._base_tgcn_layers = torch.nn.ModuleList()
+        for layer_idx in range(self.num_layers):
+            self._base_tgcn_layers.append(TGCN2(
+                in_channels=self.in_channels if layer_idx == 0 else self.out_channels,
+                out_channels=self.out_channels,
+                batch_size=self.batch_size,
+                improved=self.improved,
+                cached=self.cached,
+                add_self_loops=self.add_self_loops,
+                fuse_gates=self.fuse_gates,
+            ))
+        self._base_tgcn = self._base_tgcn_layers[0]
+        self._dropout = torch.nn.Dropout(self.dropout_p)
 
         self._attention = torch.nn.Parameter(torch.empty(self.periods, device=self.device))
         torch.nn.init.uniform_(self._attention)
@@ -174,13 +185,25 @@ class A3TGCN2(torch.nn.Module):
         
         probs = torch.nn.functional.softmax(self._attention, dim=0)
         
-        H_previous = H 
+        if H is None:
+            H_previous = [None for _ in range(self.num_layers)]
+        elif isinstance(H, (list, tuple)):
+            if len(H) != self.num_layers:
+                raise ValueError(f"H must have {self.num_layers} hidden states, got {len(H)}")
+            H_previous = list(H)
+        elif self.num_layers == 1:
+            H_previous = [H]
+        else:
+            H_previous = [None for _ in range(self.num_layers)]
         
         for period in range(self.periods):
             X_current = X[:, :, :, period] # shape: [batch_size, num_nodes, feature_dim]. 이런 식으로 반복문 돌리면 period와 같은 차원은 없어짐(축소)
-            H_current = self._base_tgcn(X_current, edge_index, edge_weight, H_previous)
-            H_previous = H_current 
-            H_sequence_outputs.append(probs[period] * H_current)
+            current = X_current
+            for layer_idx, layer in enumerate(self._base_tgcn_layers):
+                H_current = layer(current, edge_index, edge_weight, H_previous[layer_idx])
+                H_previous[layer_idx] = H_current
+                current = self._dropout(H_current) if layer_idx < self.num_layers - 1 else H_current
+            H_sequence_outputs.append(probs[period] * current)
 
         H_accum = sum(H_sequence_outputs)
 

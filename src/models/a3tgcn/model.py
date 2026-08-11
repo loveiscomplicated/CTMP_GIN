@@ -59,6 +59,8 @@ class A3TGCN_manual(nn.Module):
         self.batch_size = batch_size
         self.hidden_channel = hidden_channel
         self.num_classes = num_classes
+        self.num_layers = int(kwargs.get("num_layers", 1))
+        self.dropout_p = float(kwargs.get("dropout_p", 0.0))
 
         # col_info: (col_list, col_dims, ad_col_index, dis_col_index)
         self.col_list, self.col_dims, self.ad_col_index, self.dis_col_index = col_info
@@ -74,13 +76,16 @@ class A3TGCN_manual(nn.Module):
                         periods=37,
                         batch_size=batch_size,
                         device=device,
-                        cached=cached) # 이거 지이이이이이이이인짜 중요함 이걸 해야 성능이 완전 좋아짐
+                        cached=cached,
+                        num_layers=self.num_layers,
+                        dropout_p=self.dropout_p) # 이거 지이이이이이이이인짜 중요함 이걸 해야 성능이 완전 좋아짐
 
         # 분류기 레이어 정의
         out_dim = 1 if self.num_classes == 2 else self.num_classes
         self.classifier = nn.Sequential(
             nn.Linear(hidden_channel, hidden_channel * 2),
             nn.ReLU(),
+            nn.Dropout(self.dropout_p),
             nn.Linear(hidden_channel * 2, out_dim),
         )
     
