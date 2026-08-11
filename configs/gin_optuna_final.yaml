@@ -2,7 +2,6 @@ device: null # if null, it automatically sets the available device. (cuda | mps 
 
 edge:
   is_mi_based: True # if 0, it generates fully connected edge index.
-  n_neighbors: 3 # NOTE: cv result of n_neighbors: 3
   top_k: 12
   threshold: 0.005
   pruning_ratio: 0.3

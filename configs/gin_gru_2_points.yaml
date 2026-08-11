@@ -2,7 +2,6 @@ device: null # if null, it automatically sets the available device. (cuda | mps 
             # it is often better to use cpu due to recurrent unit.
 edge:
   is_mi_based: True # if 0, it generates fully connected edge index.
-  n_neighbors: 7 # NOTE: cv result of n_neighbors: 3
   top_k: 6
   threshold: 0.02
   pruning_ratio: 0.3

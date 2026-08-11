@@ -4,7 +4,6 @@ device: null
 
 edge:
   is_mi_based: True
-  n_neighbors: 5
   top_k: 6
   threshold: 0.0
   pruning_ratio: 0.3

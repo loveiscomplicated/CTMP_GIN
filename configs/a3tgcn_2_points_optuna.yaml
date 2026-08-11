@@ -1,7 +1,5 @@
-#  python -m src.trainers.run_parameter_search_optuna_local \
-#      --config configs/a3tgcn_2_points_optuna.yaml \
-#      --n-trials 50 \
-#      --epochs 50
+# Protocol HPO entrypoint:
+# uv run python -m src.protocol.runner --stage hpo --config configs/a3tgcn_2_points_optuna.yaml ...
 
 # although mps is available, it is often better to use cpu
 # need is_copied on edge
@@ -10,7 +8,6 @@ device: null # if null, it automatically sets the available device. (cuda | mps 
 
 edge:
   is_mi_based: True # if 0, it generates fully connected edge index.
-  n_neighbors: 5 # NOTE: cv result of n_neighbors: 3
   top_k: 12
   threshold: 0.005
   pruning_ratio: 0.7
@@ -41,5 +38,3 @@ train:
   decision_threshold: 0.5
   cv: True # kfold crosss validation
   n_folds: 5
-
-  
