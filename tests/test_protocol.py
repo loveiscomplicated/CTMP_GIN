@@ -9,11 +9,20 @@ import torch
 
 from src.protocol.artifacts import create_eval_artifact, create_hpo_artifact
 from src.protocol.ablations import apply_variant
-from src.protocol.analysis import analyze_paired_results
+from src.protocol.analysis import analyze_paired_results, build_paired_results
 from src.protocol.graph_config import load_graph_config, write_graph_config
 from src.protocol.hpo import apply_trial_params, suggest_protocol_params
 from src.protocol.mi import compute_mi_dict, mi_cache_path
-from src.protocol.runner import _redact_storage, _require_protocol_codebook, _resolve_optuna_storage, _storage_backend
+from src.protocol.runner import (
+    _namespaced_study_name,
+    _parse_eval_seeds,
+    _redact_storage,
+    _require_protocol_codebook,
+    _resolve_optuna_storage,
+    _select_eval_splits,
+    _storage_backend,
+    _variant_cfg,
+)
 from src.protocol.stats import bh_fdr_adjust, holm_adjust, nadeau_bengio_corrected_t, tost
 from src.protocol.vocabulary import encode_with_codebook
 from src.data_processing.edge import fully_connected_edge_index, fully_connected_pair_edge_index
@@ -90,6 +99,32 @@ def test_protocol_optuna_storage_can_come_from_environment(tmp_path, monkeypatch
     assert _resolve_optuna_storage(tmp_path) == "postgresql://user:pass@db/optuna"
 
 
+def test_protocol_study_names_are_run_dir_namespaced(tmp_path):
+    first = _namespaced_study_name(tmp_path / "run_a", "ctmp_gin")
+    second = _namespaced_study_name(tmp_path / "run_b", "ctmp_gin")
+    assert first != second
+    assert first.endswith("__ctmp_gin")
+    assert _namespaced_study_name(tmp_path / "run", "ctmp_gin", "paper1") == "paper1__ctmp_gin"
+
+
+def test_variant_source_validation_blocks_wrong_base_model():
+    with pytest.raises(SystemExit, match="C1 must be run with a gin config"):
+        _variant_cfg({"model": {"name": "ctmp_gin", "params": {}}}, "C1")
+    c1 = _variant_cfg({"model": {"name": "gin", "params": {}}}, "C1")
+    assert c1["admission_only"] is True
+    with pytest.raises(SystemExit, match="xgboost_admission must be run with a xgboost config"):
+        _variant_cfg({"model": {"name": "gin", "params": {}}}, "xgboost_admission")
+
+
+def test_eval_seed_filter_selects_two_seed_ablation_plan(tmp_path):
+    artifact = create_eval_artifact(np.array([0, 1] * 100), tmp_path / "eval.json")
+    selected = _select_eval_splits(artifact, _parse_eval_seeds("1,2"))
+    assert len(selected) == 10
+    assert {split["eval_seed"] for split in selected} == {1, 2}
+    with pytest.raises(ValueError, match="requested eval seeds"):
+        _select_eval_splits(artifact, (999,))
+
+
 def test_analysis_requires_sesoi_for_f4(tmp_path):
     path = tmp_path / "pairs.json"
     path.write_text(json.dumps({"comparisons": [{
@@ -109,6 +144,35 @@ def test_analysis_enforces_single_primary_family(tmp_path):
     ]}), encoding="utf-8")
     with pytest.raises(ValueError, match="F1 allows at most 1"):
         analyze_paired_results(str(path))
+
+
+def test_build_paired_results_from_evaluation_summaries(tmp_path):
+    split_artifact = create_eval_artifact(np.array([0, 1] * 100), tmp_path / "eval.json")
+    split_ids = [split["split_id"] for split in split_artifact["splits"][:3]]
+    candidate = {
+        "results": [
+            {"split_id": split_id, "result": {"test_auc": 0.90 + index * 0.01}}
+            for index, split_id in enumerate(split_ids)
+        ]
+    }
+    reference = {
+        "results": [
+            {"split_id": split_id, "result": {"test_auc": 0.80 + index * 0.01}}
+            for index, split_id in enumerate(split_ids)
+        ]
+    }
+    candidate_path = tmp_path / "candidate.json"
+    reference_path = tmp_path / "reference.json"
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    reference_path.write_text(json.dumps(reference), encoding="utf-8")
+    paired = build_paired_results(
+        [f"F1,ctmp_gin,a3tgcn,{candidate_path},{reference_path}"],
+        tmp_path / "eval.json",
+    )
+    comparison = paired["comparisons"][0]
+    assert comparison["split_ids"] == split_ids
+    assert comparison["differences"] == pytest.approx([0.1, 0.1, 0.1])
+    assert comparison["n_train"] > comparison["n_test"]
 
 
 def test_los_as_node_ctmp_path_uses_zero_edge_attributes():

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .stats import bh_fdr_adjust, holm_adjust, nadeau_bengio_corrected_t, tost
 
 
@@ -18,6 +20,89 @@ ADJUSTERS = {
     "holm": holm_adjust,
     "bh_fdr": bh_fdr_adjust,
 }
+
+
+def _load_summary(path: str | Path) -> dict[str, Any]:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _metric_from_result(result: dict[str, Any], metric: str) -> float:
+    if metric in result:
+        return float(result[metric])
+    nested = result.get("result", {})
+    if metric in nested:
+        return float(nested[metric])
+    raise KeyError(f"metric {metric!r} not found in evaluation result")
+
+
+def _parse_comparison_spec(spec: str) -> dict[str, str]:
+    parts = spec.split(",", 4)
+    if len(parts) != 5:
+        raise ValueError(
+            "--comparison must use 'family,candidate,reference,candidate_summary,reference_summary'"
+        )
+    family, candidate, reference, candidate_summary, reference_summary = [part.strip() for part in parts]
+    return {
+        "family": family,
+        "candidate": candidate,
+        "reference": reference,
+        "candidate_summary": candidate_summary,
+        "reference_summary": reference_summary,
+    }
+
+
+def build_paired_results(
+    comparison_specs: list[str | dict[str, str]],
+    split_artifact_path: str | Path,
+    *,
+    metric: str = "test_auc",
+) -> dict[str, Any]:
+    split_artifact = _load_summary(split_artifact_path)
+    split_meta = {split["split_id"]: split for split in split_artifact.get("splits", [])}
+    if not split_meta:
+        raise ValueError("split artifact contains no evaluation splits")
+
+    comparisons = []
+    for raw_spec in comparison_specs:
+        spec = _parse_comparison_spec(raw_spec) if isinstance(raw_spec, str) else raw_spec
+        candidate_summary = _load_summary(spec["candidate_summary"])
+        reference_summary = _load_summary(spec["reference_summary"])
+        candidate_by_split = {item["split_id"]: item["result"] for item in candidate_summary.get("results", [])}
+        reference_by_split = {item["split_id"]: item["result"] for item in reference_summary.get("results", [])}
+        split_ids = [split_id for split_id in split_meta if split_id in candidate_by_split and split_id in reference_by_split]
+        if not split_ids:
+            raise ValueError(
+                f"no paired splits for {spec.get('candidate')} vs {spec.get('reference')}"
+            )
+
+        candidate_values = [_metric_from_result(candidate_by_split[split_id], metric) for split_id in split_ids]
+        reference_values = [_metric_from_result(reference_by_split[split_id], metric) for split_id in split_ids]
+        differences = [candidate - reference for candidate, reference in zip(candidate_values, reference_values)]
+        n_train_values = [
+            len(split_meta[split_id]["train_idx"]) + len(split_meta[split_id].get("val_idx", []))
+            for split_id in split_ids
+        ]
+        n_test_values = [len(split_meta[split_id]["test_idx"]) for split_id in split_ids]
+        comparisons.append({
+            "family": spec["family"],
+            "candidate": spec["candidate"],
+            "reference": spec["reference"],
+            "metric": metric,
+            "split_ids": split_ids,
+            "candidate_values": candidate_values,
+            "reference_values": reference_values,
+            "differences": differences,
+            "n_train": int(round(float(np.mean(n_train_values)))),
+            "n_test": int(round(float(np.mean(n_test_values)))),
+            "n_train_values": n_train_values,
+            "n_test_values": n_test_values,
+        })
+
+    return {
+        "metric": metric,
+        "split_artifact": str(Path(split_artifact_path)),
+        "comparisons": comparisons,
+    }
 
 
 def analyze_paired_results(path: str, *, sesoi: float | None = None) -> dict[str, Any]:

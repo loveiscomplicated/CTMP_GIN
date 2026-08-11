@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
@@ -28,8 +29,33 @@ from .constants import EVAL_SEEDS, HPO_SEED
 from .graph_config import hub_concentration, load_graph_config, write_graph_config
 from .hpo import apply_trial_params, suggest_protocol_params
 from .preflight import run_preflight
-from .analysis import analyze_paired_results
+from .analysis import analyze_paired_results, build_paired_results
 from .ablations import VARIANTS, apply_variant
+
+
+DATA_STAGES = {
+    "preflight",
+    "prepare",
+    "edge-pilot",
+    "hpo",
+    "top5-reeval",
+    "evaluate",
+    "ablation-hpo",
+    "ablation-evaluate",
+}
+
+CTMP_VARIANTS = {
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "B1",
+    "B3",
+    "w/o_merged_stream",
+    "w/o_gated_fusion",
+    "w/o_mi_edge",
+    "w/o_preprocessing",
+}
 
 
 def _write(path: Path, payload: Any) -> None:
@@ -103,6 +129,20 @@ def _safe_filename(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "unnamed"
 
 
+def _default_study_prefix(run_path: Path) -> str:
+    resolved = str(run_path.resolve())
+    digest = hashlib.blake2b(resolved.encode("utf-8"), digest_size=6).hexdigest()
+    return f"{_safe_filename(run_path.name)}_{digest}"
+
+
+def _resolve_study_prefix(run_path: Path, study_prefix: str | None = None) -> str:
+    return _safe_filename(study_prefix) if study_prefix else _default_study_prefix(run_path)
+
+
+def _namespaced_study_name(run_path: Path, study_name: str, study_prefix: str | None = None) -> str:
+    return f"{_resolve_study_prefix(run_path, study_prefix)}__{_safe_filename(study_name)}"
+
+
 def _worker_id() -> str:
     parts = [
         socket.gethostname(),
@@ -117,7 +157,7 @@ def _resolve_codebook_path(cfg: dict[str, Any]) -> str | None:
 
 
 def _require_protocol_codebook(cfg: dict[str, Any], stage: str) -> None:
-    if stage == "analyze":
+    if stage not in DATA_STAGES:
         return
     codebook_path = _resolve_codebook_path(cfg)
     if not codebook_path:
@@ -125,6 +165,54 @@ def _require_protocol_codebook(cfg: dict[str, Any], stage: str) -> None:
     if not Path(codebook_path).exists():
         raise SystemExit(f"codebook does not exist: {codebook_path}")
     cfg["codebook_path"] = codebook_path
+
+
+def _required_model_for_variant(variant: str) -> str | None:
+    if variant == "full":
+        return None
+    if variant in CTMP_VARIANTS:
+        return "ctmp_gin"
+    source = VARIANTS.get(variant, {}).get("source")
+    return str(source) if source else None
+
+
+def _validate_variant_config(cfg: dict[str, Any], variant: str) -> None:
+    if variant not in VARIANTS:
+        raise SystemExit(f"unknown protocol variant: {variant}")
+    required_model = _required_model_for_variant(variant)
+    actual_model = cfg.get("model", {}).get("name")
+    if required_model and actual_model != required_model:
+        raise SystemExit(
+            f"{variant} must be run with a {required_model} config, got {actual_model!r}"
+        )
+
+
+def _variant_cfg(cfg: dict[str, Any], variant: str) -> dict[str, Any]:
+    _validate_variant_config(cfg, variant)
+    return cfg if variant == "full" else apply_variant(cfg, variant)
+
+
+def _parse_eval_seeds(value: str | None) -> tuple[int, ...] | None:
+    if value is None or value.strip() == "":
+        return None
+    seeds = tuple(int(part.strip()) for part in value.split(",") if part.strip())
+    if not seeds:
+        raise ValueError("--eval-seeds did not contain any valid seed")
+    return seeds
+
+
+def _select_eval_splits(eval_artifact: dict[str, Any], eval_seeds: tuple[int, ...] | None = None) -> list[dict[str, Any]]:
+    splits = list(eval_artifact.get("splits", []))
+    if eval_seeds is None:
+        return splits
+    available = {int(split["eval_seed"]) for split in splits}
+    missing = sorted(set(eval_seeds) - available)
+    if missing:
+        raise ValueError(f"requested eval seeds not present in split artifact: {missing}")
+    selected = [split for split in splits if int(split["eval_seed"]) in set(eval_seeds)]
+    if not selected:
+        raise ValueError("no evaluation splits selected")
+    return selected
 
 
 def _dataset(cfg: dict[str, Any], root: str):
@@ -221,13 +309,16 @@ def run_hpo(
     warm_start_params: dict[str, Any] | None = None,
     storage: str | None = None,
     allow_sqlite_storage: bool = False,
+    study_prefix: str | None = None,
+    variant: str = "full",
 ):
     if optuna is None:
         raise RuntimeError("Optuna is required for the hpo stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
     graph_config = load_graph_config(graph_config_path)
     storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
-    study_name = study_name or f"{cfg['model']['name']}_protocol"
+    requested_study_name = study_name or f"{cfg['model']['name']}_protocol"
+    study_name = _namespaced_study_name(run_path, requested_study_name, study_prefix)
     sampler = optuna.samplers.TPESampler(seed=HPO_SEED, multivariate=True, group=True, n_startup_trials=20, constant_liar=True)
     pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5, interval_steps=1)
     study = optuna.create_study(
@@ -256,6 +347,9 @@ def run_hpo(
     study.optimize(objective, n_trials=n_trials, gc_after_trial=True)
     summary = {
         "study_name": study.study_name,
+        "requested_study_name": requested_study_name,
+        "study_prefix": _resolve_study_prefix(run_path, study_prefix),
+        "variant": variant,
         "worker_id": _worker_id(),
         "storage_backend": _storage_backend(storage),
         "storage": _redact_storage(storage),
@@ -276,15 +370,21 @@ def run_top5(
     root: str,
     run_dir: str,
     graph_config_path: str,
-    study_name: str,
+    study_name: str | None = None,
     storage: str | None = None,
     allow_sqlite_storage: bool = False,
+    study_prefix: str | None = None,
+    variant: str = "full",
 ) -> dict[str, Any]:
     if optuna is None:
         raise RuntimeError("Optuna is required for the top5-reeval stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
     graph_config = load_graph_config(graph_config_path)
     storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
+    requested_study_name = study_name or (
+        f"{cfg['model']['name']}_{variant}" if variant != "full" else f"{cfg['model']['name']}_protocol"
+    )
+    study_name = _namespaced_study_name(run_path, requested_study_name, study_prefix)
     study = optuna.load_study(study_name=study_name, storage=storage)
     completed = sorted(
         (trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE),
@@ -299,9 +399,21 @@ def run_top5(
     if not rankings:
         raise RuntimeError("top-5 reevaluation requires at least one completed HPO trial")
     winner = max(rankings, key=lambda item: item["full_mean"])
-    selected = {"trial_number": winner["trial_number"], "params": winner["params"], "full_mean": winner["full_mean"], "graph_config_fingerprint": graph_config["graph_config_fingerprint"]}
+    selected = {
+        "trial_number": winner["trial_number"],
+        "params": winner["params"],
+        "full_mean": winner["full_mean"],
+        "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
+        "study_name": study.study_name,
+        "requested_study_name": requested_study_name,
+        "study_prefix": _resolve_study_prefix(run_path, study_prefix),
+        "variant": variant,
+        "model_name": cfg["model"]["name"],
+    }
     _write(run_path / "top5_reevaluation.json", {"rankings": rankings, "winner": selected})
     _write(run_path / "selected_config.json", selected)
+    if variant != "full":
+        _write(run_path / f"selected_config_{_safe_filename(variant)}.json", selected)
     return selected
 
 
@@ -312,17 +424,20 @@ def run_graph_pilot(
     n_trials: int = 20,
     storage: str | None = None,
     allow_sqlite_storage: bool = False,
+    study_prefix: str | None = None,
 ) -> dict[str, Any]:
     if optuna is None:
         raise RuntimeError("Optuna is required for the edge-pilot stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
     pilot_dataset, _ = _dataset(cfg, root)
     resolved_storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
+    resolved_study_prefix = _resolve_study_prefix(run_path, study_prefix)
     pilot_results = []
-    for score_method, thresholds, study_name in [
+    for score_method, thresholds, requested_study_name in [
         ("raw_mi", [0.0, 0.005, 0.01, 0.02], "edge_pilot_raw_mi"),
         ("nmi", [0.0, 0.02, 0.05, 0.10], "edge_pilot_nmi"),
     ]:
+        study_name = _namespaced_study_name(run_path, requested_study_name, resolved_study_prefix)
         study = optuna.create_study(
             study_name=study_name,
             storage=resolved_storage,
@@ -370,6 +485,8 @@ def run_graph_pilot(
         best = study.best_trial
         pilot_results.append({
             "study_name": study_name,
+            "requested_study_name": requested_study_name,
+            "study_prefix": resolved_study_prefix,
             "score_method": score_method,
             "storage_backend": _storage_backend(resolved_storage),
             "value": best.value,
@@ -398,13 +515,24 @@ def run_graph_pilot(
     )
 
 
-def run_evaluation(cfg: dict[str, Any], root: str, run_dir: str, graph_config_path: str, selected_config_path: str):
+def run_evaluation(
+    cfg: dict[str, Any],
+    root: str,
+    run_dir: str,
+    graph_config_path: str,
+    selected_config_path: str,
+    *,
+    eval_seeds: tuple[int, ...] | None = None,
+    variant: str = "full",
+):
     run_path, eval_artifact, _ = _require_artifacts(run_dir)
     graph_config = load_graph_config(graph_config_path)
     selected = load_json(selected_config_path)
     selected_cfg = apply_trial_params(cfg, selected["params"], graph_config)
     results = []
-    for split in eval_artifact["splits"]:
+    splits = _select_eval_splits(eval_artifact, eval_seeds)
+
+    for split in splits:
         train_idx, val_idx, test_idx = _fold_indices(split, test=True)
         split_cfg = copy.deepcopy(selected_cfg)
         split_cfg["train"]["seed"] = int(split["eval_seed"])
@@ -422,6 +550,9 @@ def run_evaluation(cfg: dict[str, Any], root: str, run_dir: str, graph_config_pa
         _write(run_path / "evaluation" / f"{split['split_id']}.json", results[-1])
     _write(run_path / "evaluation_summary.json", {
         "count": len(results),
+        "variant": variant,
+        "model_name": cfg["model"]["name"],
+        "eval_seeds": sorted({int(split["eval_seed"]) for split in splits}),
         "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
         "results": results,
     })
@@ -430,9 +561,9 @@ def run_evaluation(cfg: dict[str, Any], root: str, run_dir: str, graph_config_pa
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="CTMP-GIN reproducible protocol runner")
-    parser.add_argument("--stage", required=True, choices=["preflight", "prepare", "edge-pilot", "hpo", "top5-reeval", "evaluate", "ablation-hpo", "ablation-evaluate", "analyze"])
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--root", required=True)
+    parser.add_argument("--stage", required=True, choices=["preflight", "prepare", "edge-pilot", "hpo", "top5-reeval", "evaluate", "ablation-hpo", "ablation-evaluate", "pair-results", "analyze"])
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--root", default=None)
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--graph-config", default=None)
     parser.add_argument("--selected-config", default=None)
@@ -440,9 +571,14 @@ def main() -> None:
     parser.add_argument("--n-trials", type=int, default=100)
     parser.add_argument("--codebook", default=None)
     parser.add_argument("--paired-results", default=None)
+    parser.add_argument("--comparison", action="append", default=[], help="For pair-results: family,candidate,reference,candidate_summary,reference_summary")
+    parser.add_argument("--metric", default="test_auc")
+    parser.add_argument("--split-artifact", default=None)
     parser.add_argument("--sesoi", type=float, default=None)
     parser.add_argument("--variant", default="full")
     parser.add_argument("--warm-start", default=None)
+    parser.add_argument("--eval-seeds", default=None, help="Comma-separated eval seeds to run, e.g. '1,2'. Defaults to all artifact seeds.")
+    parser.add_argument("--study-prefix", default=None, help="Namespace Optuna study names. Defaults to a stable hash of --run-dir.")
     parser.add_argument(
         "--storage",
         default=None,
@@ -454,11 +590,16 @@ def main() -> None:
         help="Explicitly allow local SQLite Optuna storage for single-process smoke runs.",
     )
     args = parser.parse_args()
-    cfg = _load_cfg(args.config)
-    if args.codebook:
-        if not Path(args.codebook).exists():
-            raise SystemExit(f"codebook does not exist: {args.codebook}")
-        cfg["codebook_path"] = args.codebook
+    if args.stage in DATA_STAGES:
+        if not args.config or not args.root:
+            raise SystemExit("--config and --root are required for data/model protocol stages")
+        cfg = _load_cfg(args.config)
+        if args.codebook:
+            if not Path(args.codebook).exists():
+                raise SystemExit(f"codebook does not exist: {args.codebook}")
+            cfg["codebook_path"] = args.codebook
+    else:
+        cfg = {}
     _require_protocol_codebook(cfg, args.stage)
     if args.stage == "preflight":
         _, labels = _dataset(cfg, args.root)
@@ -473,6 +614,7 @@ def main() -> None:
             args.n_trials if args.n_trials != 100 else 20,
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
+            study_prefix=args.study_prefix,
         )
     elif args.stage == "hpo":
         if not args.graph_config:
@@ -486,6 +628,7 @@ def main() -> None:
             args.study_name,
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
+            study_prefix=args.study_prefix,
         )
     elif args.stage == "ablation-hpo":
         if not args.graph_config or not args.variant or args.variant == "full":
@@ -493,7 +636,7 @@ def main() -> None:
         if not VARIANTS[args.variant].get("hpo", False):
             raise SystemExit(f"{args.variant} uses inherited HPO; run ablation-evaluate instead")
         warm_start = load_json(args.warm_start)["params"] if args.warm_start else None
-        variant_cfg = apply_variant(cfg, args.variant)
+        variant_cfg = _variant_cfg(cfg, args.variant)
         run_hpo(
             variant_cfg,
             args.root,
@@ -504,27 +647,54 @@ def main() -> None:
             warm_start,
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
+            study_prefix=args.study_prefix,
+            variant=args.variant,
         )
     elif args.stage == "top5-reeval":
-        if not args.graph_config or not args.study_name:
-            raise SystemExit("--graph-config and --study-name are required for top5-reeval")
+        if not args.graph_config:
+            raise SystemExit("--graph-config is required for top5-reeval")
         run_top5(
-            cfg,
+            _variant_cfg(cfg, args.variant),
             args.root,
             args.run_dir,
             args.graph_config,
             args.study_name,
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
+            study_prefix=args.study_prefix,
+            variant=args.variant,
         )
     elif args.stage == "evaluate":
         if not args.graph_config or not args.selected_config:
             raise SystemExit("--graph-config and --selected-config are required for evaluate")
-        run_evaluation(cfg, args.root, args.run_dir, args.graph_config, args.selected_config)
+        run_evaluation(
+            cfg,
+            args.root,
+            args.run_dir,
+            args.graph_config,
+            args.selected_config,
+            eval_seeds=_parse_eval_seeds(args.eval_seeds),
+            variant="full",
+        )
     elif args.stage == "ablation-evaluate":
         if not args.graph_config or not args.selected_config or not args.variant or args.variant == "full":
             raise SystemExit("--graph-config, --selected-config, and a non-full --variant are required")
-        run_evaluation(apply_variant(cfg, args.variant), args.root, args.run_dir, args.graph_config, args.selected_config)
+        run_evaluation(
+            _variant_cfg(cfg, args.variant),
+            args.root,
+            args.run_dir,
+            args.graph_config,
+            args.selected_config,
+            eval_seeds=_parse_eval_seeds(args.eval_seeds),
+            variant=args.variant,
+        )
+    elif args.stage == "pair-results":
+        if not args.comparison:
+            raise SystemExit("--comparison is required for pair-results")
+        split_artifact = args.split_artifact or str(Path(args.run_dir) / "d_eval_split_artifact.json")
+        output_path = Path(args.paired_results) if args.paired_results else Path(args.run_dir) / "paired_results.json"
+        result = build_paired_results(args.comparison, split_artifact, metric=args.metric)
+        _write(output_path, result)
     elif args.stage == "analyze":
         if not args.paired_results:
             raise SystemExit("--paired-results is required for analyze")
