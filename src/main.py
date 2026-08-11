@@ -40,7 +40,9 @@ def parse_args():
         choices=["embedding", "nn_embedding", "hybrid_ordinal"],
         default=None,
     )
-    p.add_argument("--cv", type=lambda x: x.lower() not in ("false", "0", "no"), default=None)
+    p.add_argument(
+        "--cv", type=lambda x: x.lower() not in ("false", "0", "no"), default=None
+    )
     p.add_argument("--fold", type=int, default=None)
     p.add_argument("--cv_run_dir", type=str, default=None)
     p.add_argument("--resume_fold_from_last", action="store_true")
@@ -72,7 +74,9 @@ def override_cfg(cfg: dict, args) -> dict:
     if args.binary is not None:
         cfg.setdefault("train", {})["binary"] = bool(args.binary)
     if args.los_emb is not None:
-        cfg.setdefault("model", {}).setdefault("params", {})["los_emb"] = str(args.los_emb)
+        cfg.setdefault("model", {}).setdefault("params", {})["los_emb"] = str(
+            args.los_emb
+        )
     if args.decision_threshold is not None:
         cfg.setdefault("train", {})["decision_threshold"] = args.decision_threshold
     if args.cv is not None:
