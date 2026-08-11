@@ -8,6 +8,7 @@ python-dotenv
 
 # --- science / stats ---
 scikit-learn
+scipy
 
 # --- viz ---
 matplotlib
