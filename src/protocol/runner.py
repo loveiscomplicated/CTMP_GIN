@@ -4,8 +4,12 @@ import argparse
 import copy
 import json
 import os
+import re
+import socket
+import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 import yaml
@@ -30,12 +34,82 @@ from .ablations import VARIANTS, apply_variant
 
 def _write(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        tmp_path = Path(handle.name)
+        handle.write(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+    tmp_path.replace(path)
 
 
 def _load_cfg(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def _default_sqlite_storage(run_path: Path) -> str:
+    return f"sqlite:///{(run_path / 'protocol_optuna.db').resolve()}"
+
+
+def _storage_backend(storage: str) -> str:
+    return urlsplit(storage).scheme.split("+", 1)[0].lower()
+
+
+def _is_sqlite_storage(storage: str) -> bool:
+    return _storage_backend(storage) == "sqlite"
+
+
+def _redact_storage(storage: str) -> str:
+    parsed = urlsplit(storage)
+    if not parsed.password:
+        return storage
+    user = parsed.username or ""
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{user}:***@{host}{port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def _resolve_optuna_storage(
+    run_path: Path,
+    storage: str | None = None,
+    *,
+    allow_sqlite_storage: bool = False,
+) -> str:
+    resolved = storage or os.environ.get("PROTOCOL_OPTUNA_STORAGE") or os.environ.get("OPTUNA_STORAGE")
+    if resolved is None:
+        if not allow_sqlite_storage:
+            raise SystemExit(
+                "Optuna stages require --storage or PROTOCOL_OPTUNA_STORAGE. "
+                "Use PostgreSQL for parallel HPO. For local single-process smoke runs, "
+                "pass --allow-sqlite-storage explicitly."
+            )
+        resolved = _default_sqlite_storage(run_path)
+    if _is_sqlite_storage(resolved) and not allow_sqlite_storage:
+        raise SystemExit(
+            "SQLite Optuna storage is disabled by default for protocol HPO because it is "
+            "not safe for multi-worker GPU runs. Use PostgreSQL, or pass "
+            "--allow-sqlite-storage for an explicit local single-process run."
+        )
+    return resolved
+
+
+def _safe_filename(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "unnamed"
+
+
+def _worker_id() -> str:
+    parts = [
+        socket.gethostname(),
+        f"pid{os.getpid()}",
+        f"gpu{os.environ.get('CUDA_VISIBLE_DEVICES', 'all')}",
+    ]
+    return _safe_filename("_".join(parts))
 
 
 def _resolve_codebook_path(cfg: dict[str, Any]) -> str | None:
@@ -145,12 +219,14 @@ def run_hpo(
     n_trials: int = 100,
     study_name: str | None = None,
     warm_start_params: dict[str, Any] | None = None,
+    storage: str | None = None,
+    allow_sqlite_storage: bool = False,
 ):
     if optuna is None:
         raise RuntimeError("Optuna is required for the hpo stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
     graph_config = load_graph_config(graph_config_path)
-    storage = f"sqlite:///{(run_path / 'protocol_optuna.db').resolve()}"
+    storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
     study_name = study_name or f"{cfg['model']['name']}_protocol"
     sampler = optuna.samplers.TPESampler(seed=HPO_SEED, multivariate=True, group=True, n_startup_trials=20, constant_liar=True)
     pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5, interval_steps=1)
@@ -178,24 +254,37 @@ def run_hpo(
         return float(np.mean(scores))
 
     study.optimize(objective, n_trials=n_trials, gc_after_trial=True)
-    _write(run_path / "hpo_summary.json", {
+    summary = {
         "study_name": study.study_name,
+        "worker_id": _worker_id(),
+        "storage_backend": _storage_backend(storage),
+        "storage": _redact_storage(storage),
         "n_trials": len(study.trials),
         "completed": sum(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials),
         "pruned": sum(t.state == optuna.trial.TrialState.PRUNED for t in study.trials),
         "best_trial": study.best_trial.number if study.best_trial else None,
         "best_params": study.best_params if study.best_trial else {},
         "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
-    })
+    }
+    _write(run_path / "hpo_summary.json", summary)
+    _write(run_path / "hpo_summaries" / f"{_safe_filename(study.study_name)}_{summary['worker_id']}.json", summary)
     return study
 
 
-def run_top5(cfg: dict[str, Any], root: str, run_dir: str, graph_config_path: str, study_name: str) -> dict[str, Any]:
+def run_top5(
+    cfg: dict[str, Any],
+    root: str,
+    run_dir: str,
+    graph_config_path: str,
+    study_name: str,
+    storage: str | None = None,
+    allow_sqlite_storage: bool = False,
+) -> dict[str, Any]:
     if optuna is None:
         raise RuntimeError("Optuna is required for the top5-reeval stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
     graph_config = load_graph_config(graph_config_path)
-    storage = f"sqlite:///{(run_path / 'protocol_optuna.db').resolve()}"
+    storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
     study = optuna.load_study(study_name=study_name, storage=storage)
     completed = sorted(
         (trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE),
@@ -216,20 +305,27 @@ def run_top5(cfg: dict[str, Any], root: str, run_dir: str, graph_config_path: st
     return selected
 
 
-def run_graph_pilot(cfg: dict[str, Any], root: str, run_dir: str, n_trials: int = 20) -> dict[str, Any]:
+def run_graph_pilot(
+    cfg: dict[str, Any],
+    root: str,
+    run_dir: str,
+    n_trials: int = 20,
+    storage: str | None = None,
+    allow_sqlite_storage: bool = False,
+) -> dict[str, Any]:
     if optuna is None:
         raise RuntimeError("Optuna is required for the edge-pilot stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
     pilot_dataset, _ = _dataset(cfg, root)
+    resolved_storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
     pilot_results = []
     for score_method, thresholds, study_name in [
         ("raw_mi", [0.0, 0.005, 0.01, 0.02], "edge_pilot_raw_mi"),
         ("nmi", [0.0, 0.02, 0.05, 0.10], "edge_pilot_nmi"),
     ]:
-        storage = f"sqlite:///{(run_path / 'protocol_optuna.db').resolve()}"
         study = optuna.create_study(
             study_name=study_name,
-            storage=storage,
+            storage=resolved_storage,
             direction="maximize",
             sampler=optuna.samplers.TPESampler(seed=HPO_SEED, multivariate=True, group=True, constant_liar=True),
             pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5),
@@ -275,6 +371,7 @@ def run_graph_pilot(cfg: dict[str, Any], root: str, run_dir: str, n_trials: int 
         pilot_results.append({
             "study_name": study_name,
             "score_method": score_method,
+            "storage_backend": _storage_backend(resolved_storage),
             "value": best.value,
             "params": best.params,
             "hub_concentration": best.user_attrs.get("hub_concentration", 0.0),
@@ -346,6 +443,16 @@ def main() -> None:
     parser.add_argument("--sesoi", type=float, default=None)
     parser.add_argument("--variant", default="full")
     parser.add_argument("--warm-start", default=None)
+    parser.add_argument(
+        "--storage",
+        default=None,
+        help="Optuna storage URL. Prefer PostgreSQL for parallel HPO. Can also be set via PROTOCOL_OPTUNA_STORAGE.",
+    )
+    parser.add_argument(
+        "--allow-sqlite-storage",
+        action="store_true",
+        help="Explicitly allow local SQLite Optuna storage for single-process smoke runs.",
+    )
     args = parser.parse_args()
     cfg = _load_cfg(args.config)
     if args.codebook:
@@ -359,11 +466,27 @@ def main() -> None:
     elif args.stage == "prepare":
         prepare_artifacts(cfg, args.root, args.run_dir)
     elif args.stage == "edge-pilot":
-        run_graph_pilot(cfg, args.root, args.run_dir, args.n_trials if args.n_trials != 100 else 20)
+        run_graph_pilot(
+            cfg,
+            args.root,
+            args.run_dir,
+            args.n_trials if args.n_trials != 100 else 20,
+            storage=args.storage,
+            allow_sqlite_storage=args.allow_sqlite_storage,
+        )
     elif args.stage == "hpo":
         if not args.graph_config:
             raise SystemExit("--graph-config is required for hpo")
-        run_hpo(cfg, args.root, args.run_dir, args.graph_config, args.n_trials, args.study_name)
+        run_hpo(
+            cfg,
+            args.root,
+            args.run_dir,
+            args.graph_config,
+            args.n_trials,
+            args.study_name,
+            storage=args.storage,
+            allow_sqlite_storage=args.allow_sqlite_storage,
+        )
     elif args.stage == "ablation-hpo":
         if not args.graph_config or not args.variant or args.variant == "full":
             raise SystemExit("--graph-config and a non-full --variant are required for ablation-hpo")
@@ -371,11 +494,29 @@ def main() -> None:
             raise SystemExit(f"{args.variant} uses inherited HPO; run ablation-evaluate instead")
         warm_start = load_json(args.warm_start)["params"] if args.warm_start else None
         variant_cfg = apply_variant(cfg, args.variant)
-        run_hpo(variant_cfg, args.root, args.run_dir, args.graph_config, args.n_trials if args.n_trials != 100 else 40, args.study_name or f"{cfg['model']['name']}_{args.variant}", warm_start)
+        run_hpo(
+            variant_cfg,
+            args.root,
+            args.run_dir,
+            args.graph_config,
+            args.n_trials if args.n_trials != 100 else 40,
+            args.study_name or f"{cfg['model']['name']}_{args.variant}",
+            warm_start,
+            storage=args.storage,
+            allow_sqlite_storage=args.allow_sqlite_storage,
+        )
     elif args.stage == "top5-reeval":
         if not args.graph_config or not args.study_name:
             raise SystemExit("--graph-config and --study-name are required for top5-reeval")
-        run_top5(cfg, args.root, args.run_dir, args.graph_config, args.study_name)
+        run_top5(
+            cfg,
+            args.root,
+            args.run_dir,
+            args.graph_config,
+            args.study_name,
+            storage=args.storage,
+            allow_sqlite_storage=args.allow_sqlite_storage,
+        )
     elif args.stage == "evaluate":
         if not args.graph_config or not args.selected_config:
             raise SystemExit("--graph-config and --selected-config are required for evaluate")

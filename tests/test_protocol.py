@@ -13,7 +13,7 @@ from src.protocol.analysis import analyze_paired_results
 from src.protocol.graph_config import load_graph_config, write_graph_config
 from src.protocol.hpo import apply_trial_params, suggest_protocol_params
 from src.protocol.mi import compute_mi_dict, mi_cache_path
-from src.protocol.runner import _require_protocol_codebook
+from src.protocol.runner import _redact_storage, _require_protocol_codebook, _resolve_optuna_storage, _storage_backend
 from src.protocol.stats import bh_fdr_adjust, holm_adjust, nadeau_bengio_corrected_t, tost
 from src.protocol.vocabulary import encode_with_codebook
 from src.data_processing.edge import fully_connected_edge_index, fully_connected_pair_edge_index
@@ -68,6 +68,26 @@ def test_protocol_runner_requires_codebook_for_data_stages(tmp_path):
     cfg = {"data": {"codebook_path": str(codebook)}}
     _require_protocol_codebook(cfg, "hpo")
     assert cfg["codebook_path"] == str(codebook)
+
+
+def test_protocol_optuna_storage_requires_explicit_parallel_safe_backend(tmp_path, monkeypatch):
+    monkeypatch.delenv("PROTOCOL_OPTUNA_STORAGE", raising=False)
+    monkeypatch.delenv("OPTUNA_STORAGE", raising=False)
+    with pytest.raises(SystemExit, match="Optuna stages require --storage"):
+        _resolve_optuna_storage(tmp_path)
+    sqlite_storage = _resolve_optuna_storage(tmp_path, allow_sqlite_storage=True)
+    assert sqlite_storage.startswith("sqlite:///")
+    with pytest.raises(SystemExit, match="SQLite Optuna storage is disabled"):
+        _resolve_optuna_storage(tmp_path, sqlite_storage)
+    postgres = "postgresql+psycopg2://optuna:secret@127.0.0.1:5432/optuna_db"
+    assert _resolve_optuna_storage(tmp_path, postgres) == postgres
+    assert _storage_backend(postgres) == "postgresql"
+    assert "secret" not in _redact_storage(postgres)
+
+
+def test_protocol_optuna_storage_can_come_from_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOCOL_OPTUNA_STORAGE", "postgresql://user:pass@db/optuna")
+    assert _resolve_optuna_storage(tmp_path) == "postgresql://user:pass@db/optuna"
 
 
 def test_analysis_requires_sesoi_for_f4(tmp_path):

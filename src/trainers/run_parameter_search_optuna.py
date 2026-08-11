@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-dir", type=str, default="runs/protocol")
     parser.add_argument("--graph-config", type=str, default=None)
     parser.add_argument("--codebook", type=str, default=None)
+    parser.add_argument("--storage", type=str, default=None)
     return parser.parse_args()
 
 
@@ -28,6 +29,7 @@ def _protocol_hint(args: argparse.Namespace) -> str:
     codebook = args.codebook or "<teds-d-codebook.json>"
     study_name = args.study_name or "<model>_protocol"
     n_trials = args.n_trials or 100
+    storage = args.storage or "$PROTOCOL_OPTUNA_STORAGE"
     return dedent(
         f"""
         This legacy Optuna entrypoint has been disabled.
@@ -48,7 +50,8 @@ def _protocol_hint(args: argparse.Namespace) -> str:
           uv run python -m src.protocol.runner --stage hpo \\
             --config {config} --root src/data --run-dir {run_dir} \\
             --codebook {codebook} --graph-config {graph_config} \\
-            --study-name {study_name} --n-trials {n_trials}
+            --study-name {study_name} --n-trials {n_trials} \\
+            --storage {storage}
         """
     ).strip()
 

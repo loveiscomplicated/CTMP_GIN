@@ -16,7 +16,8 @@ Use src.protocol.runner stages instead:
   uv run python -m src.protocol.runner --stage evaluate ...
 
 Required protocol arguments include --config, --root, --run-dir, --codebook,
-and for HPO/evaluation the saved --graph-config / --selected-config artifacts.
+--storage for Optuna stages, and the saved --graph-config / --selected-config
+artifacts for HPO/evaluation.
 EOF
 
 exit 2
