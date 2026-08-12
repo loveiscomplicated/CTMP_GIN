@@ -10,15 +10,22 @@ from scipy import stats
 def nadeau_bengio_corrected_t(
     differences: Iterable[float],
     *,
-    n_train: int,
-    n_test: int,
+    n_train: int | None = None,
+    n_test: int | None = None,
+    test_train_ratio: float | None = None,
 ) -> dict[str, float]:
     values = np.asarray(list(differences), dtype=float)
     if values.size < 2:
         raise ValueError("at least two paired differences are required")
     mean = float(values.mean())
     variance = float(values.var(ddof=1))
-    correction = (1.0 / values.size) + (float(n_test) / float(n_train))
+    if test_train_ratio is None:
+        if n_train is None or n_test is None:
+            raise ValueError("n_train/n_test or test_train_ratio is required")
+        test_train_ratio = float(n_test) / float(n_train)
+    if test_train_ratio <= 0:
+        raise ValueError("test_train_ratio must be positive")
+    correction = (1.0 / values.size) + float(test_train_ratio)
     standard_error = math.sqrt(max(variance * correction, 0.0))
     if standard_error == 0.0:
         t_value = math.inf if mean != 0 else 0.0
@@ -26,7 +33,14 @@ def nadeau_bengio_corrected_t(
     else:
         t_value = mean / standard_error
         p_value = float(2.0 * stats.t.sf(abs(t_value), df=values.size - 1))
-    return {"mean_difference": mean, "t": float(t_value), "p_value": p_value, "n": int(values.size)}
+    return {
+        "mean_difference": mean,
+        "t": float(t_value),
+        "p_value": p_value,
+        "n": int(values.size),
+        "test_train_ratio": float(test_train_ratio),
+        "correction": float(correction),
+    }
 
 
 def holm_adjust(p_values: Iterable[float]) -> list[float]:

@@ -8,6 +8,7 @@ from src.data_processing.edge import (
     fully_connected_edge_index,
     fully_connected_edge_index_batched,
     fully_connected_pair_edge_index,
+    mi_edge_index_batched,
     mi_edge_index_single,
 )
 from src.data_processing.mi_dict import _mi_cache_path
@@ -50,6 +51,35 @@ def test_mi_cache_path_is_split_aware(tmp_path) -> None:
     second = _mi_cache_path(str(tmp_path), seed=1, train_df=df.iloc[[0, 1, 3]], remove_los=True)
 
     assert first != second
+
+
+def test_mi_batched_discharge_edges_start_after_all_admission_graphs() -> None:
+    mi_ad_dict = {
+        "A": pd.Series({"B": 1.0}),
+        "B": pd.Series({"A": 1.0}),
+    }
+    mi_dis_dict = {
+        "A_D": pd.Series({"B_D": 1.0}),
+        "B_D": pd.Series({"A_D": 1.0}),
+    }
+
+    edge_index = mi_edge_index_batched(
+        batch_size=3,
+        num_nodes=2,
+        mi_ad_dict=mi_ad_dict,
+        mi_dis_dict=mi_dis_dict,
+        top_k=1,
+        threshold=0.0,
+        pruning_ratio=1.0,
+    )
+    edges = {tuple(edge) for edge in edge_index.t().tolist()}
+
+    expected_edges = set()
+    for graph_offset in [0, 2, 4, 6, 8, 10]:
+        expected_edges.add((graph_offset, graph_offset + 1))
+        expected_edges.add((graph_offset + 1, graph_offset))
+
+    assert edges == expected_edges
 
 
 def test_remote_mi_worker_uses_training_split_and_dataset_options() -> None:

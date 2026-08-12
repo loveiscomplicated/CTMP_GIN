@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from src.protocol.artifacts import create_eval_artifact, create_hpo_artifact
-from src.protocol.ablations import apply_variant
+from src.protocol.ablations import VARIANTS, apply_variant
 from src.protocol.analysis import analyze_paired_results, build_paired_results
 from src.protocol.graph_config import load_graph_config, write_graph_config
 from src.protocol.hpo import apply_trial_params, suggest_protocol_params
@@ -21,6 +21,7 @@ from src.protocol.runner import (
     _resolve_optuna_storage,
     _select_eval_splits,
     _storage_backend,
+    _validate_selected_config_for_variant,
     _variant_cfg,
 )
 from src.protocol.stats import bh_fdr_adjust, holm_adjust, nadeau_bengio_corrected_t, tost
@@ -47,8 +48,14 @@ def test_graph_config_requires_pilot_match(tmp_path):
         str(tmp_path / "graph_config.json"),
         {"score_method": "raw_mi", "threshold": 0.01, "top_k": 6, "pruning_ratio": 0.3},
         pilot,
+        model_name="ctmp_gin",
     )
-    assert load_graph_config(str(tmp_path / "graph_config.json"), pilot)["top_k"] == 6
+    loaded = load_graph_config(str(tmp_path / "graph_config.json"), pilot, model_name="gin")
+    assert loaded["top_k"] == 6
+    assert loaded["source_model_name"] == "ctmp_gin"
+    assert "gin" in loaded["compatible_model_names"]
+    with pytest.raises(ValueError, match="not marked compatible"):
+        load_graph_config(str(tmp_path / "graph_config.json"), pilot, model_name="unsupported_model")
     with pytest.raises(ValueError):
         load_graph_config(str(tmp_path / "graph_config.json"), {"artifact_fingerprint": "other"})
 
@@ -65,7 +72,10 @@ def test_codebook_oov_and_statistics():
     assert oov["A"] == 1
     assert len(holm_adjust([0.01, 0.04])) == 2
     assert len(bh_fdr_adjust([0.01, 0.04])) == 2
-    assert nadeau_bengio_corrected_t([0.1, 0.2, 0.15], n_train=80, n_test=20)["n"] == 3
+    nb = nadeau_bengio_corrected_t([0.1, 0.2, 0.15], n_train=80, n_test=20)
+    assert nb["n"] == 3
+    assert nb["test_train_ratio"] == pytest.approx(0.25)
+    assert nadeau_bengio_corrected_t([0.1, 0.2, 0.15], test_train_ratio=0.25)["correction"] == pytest.approx(nb["correction"])
     assert tost([0.0, 0.001, -0.001], sesoi=0.1)["equivalent"]
 
 
@@ -116,6 +126,24 @@ def test_variant_source_validation_blocks_wrong_base_model():
         _variant_cfg({"model": {"name": "gin", "params": {}}}, "xgboost_admission")
 
 
+def test_fairness_ablation_variants_require_independent_hpo():
+    for variant in ["w/o_gated_fusion", "w/o_mi_edge", "w/o_preprocessing"]:
+        assert VARIANTS[variant]["hpo"] is True
+        _validate_selected_config_for_variant(
+            {"variant": variant, "model_name": "ctmp_gin", "params": {}},
+            {"model": {"name": "ctmp_gin"}},
+            variant,
+            "selected.json",
+        )
+        with pytest.raises(ValueError, match="requires its own top5-selected config"):
+            _validate_selected_config_for_variant(
+                {"variant": "full", "model_name": "ctmp_gin", "params": {}},
+                {"model": {"name": "ctmp_gin"}},
+                variant,
+                "selected.json",
+            )
+
+
 def test_eval_seed_filter_selects_two_seed_ablation_plan(tmp_path):
     artifact = create_eval_artifact(np.array([0, 1] * 100), tmp_path / "eval.json")
     selected = _select_eval_splits(artifact, _parse_eval_seeds("1,2"))
@@ -150,12 +178,14 @@ def test_build_paired_results_from_evaluation_summaries(tmp_path):
     split_artifact = create_eval_artifact(np.array([0, 1] * 100), tmp_path / "eval.json")
     split_ids = [split["split_id"] for split in split_artifact["splits"][:3]]
     candidate = {
+        "graph_config_fingerprint": "graph123",
         "results": [
             {"split_id": split_id, "result": {"test_auc": 0.90 + index * 0.01}}
             for index, split_id in enumerate(split_ids)
         ]
     }
     reference = {
+        "graph_config_fingerprint": "graph123",
         "results": [
             {"split_id": split_id, "result": {"test_auc": 0.80 + index * 0.01}}
             for index, split_id in enumerate(split_ids)
@@ -172,7 +202,78 @@ def test_build_paired_results_from_evaluation_summaries(tmp_path):
     comparison = paired["comparisons"][0]
     assert comparison["split_ids"] == split_ids
     assert comparison["differences"] == pytest.approx([0.1, 0.1, 0.1])
-    assert comparison["n_train"] > comparison["n_test"]
+    expected_n_train = len(split_artifact["splits"][0]["train_idx"]) + len(split_artifact["splits"][0]["val_idx"])
+    expected_n_test = len(split_artifact["splits"][0]["test_idx"])
+    assert comparison["n_train"] == expected_n_train
+    assert comparison["n_test"] == expected_n_test
+    assert comparison["n_train_values"] == [expected_n_train] * 3
+    assert comparison["n_test_values"] == [expected_n_test] * 3
+    assert comparison["split_sizes_constant"] is True
+    assert comparison["nb_test_train_ratio"] == pytest.approx(expected_n_test / expected_n_train)
+
+
+def test_build_paired_results_rejects_unpaired_splits_and_graph_mismatch(tmp_path):
+    split_artifact = create_eval_artifact(np.array([0, 1] * 100), tmp_path / "eval.json")
+    split_ids = [split["split_id"] for split in split_artifact["splits"][:2]]
+    candidate_path = tmp_path / "candidate.json"
+    reference_path = tmp_path / "reference.json"
+    candidate_path.write_text(json.dumps({
+        "graph_config_fingerprint": "graph123",
+        "results": [{"split_id": split_id, "result": {"test_auc": 0.9}} for split_id in split_ids],
+    }), encoding="utf-8")
+    reference_path.write_text(json.dumps({
+        "graph_config_fingerprint": "graph123",
+        "results": [{"split_id": split_ids[0], "result": {"test_auc": 0.8}}],
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="unpaired split sets"):
+        build_paired_results(
+            [f"F1,ctmp_gin,a3tgcn,{candidate_path},{reference_path}"],
+            tmp_path / "eval.json",
+        )
+
+    reference_path.write_text(json.dumps({
+        "graph_config_fingerprint": "other_graph",
+        "results": [{"split_id": split_id, "result": {"test_auc": 0.8}} for split_id in split_ids],
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="graph_config_fingerprint mismatch"):
+        build_paired_results(
+            [f"F1,ctmp_gin,a3tgcn,{candidate_path},{reference_path}"],
+            tmp_path / "eval.json",
+        )
+
+
+def test_build_paired_results_preserves_variable_split_sizes_for_nb_correction(tmp_path):
+    split_artifact = {
+        "splits": [
+            {"split_id": "seed1_fold0", "eval_seed": 1, "fold": 0, "train_idx": [0, 1], "val_idx": [2], "test_idx": [3]},
+            {"split_id": "seed1_fold1", "eval_seed": 1, "fold": 1, "train_idx": [0, 1, 2], "val_idx": [3], "test_idx": [4]},
+        ]
+    }
+    split_path = tmp_path / "eval.json"
+    split_path.write_text(json.dumps(split_artifact), encoding="utf-8")
+    candidate_path = tmp_path / "candidate.json"
+    reference_path = tmp_path / "reference.json"
+    for path, auc in [(candidate_path, 0.9), (reference_path, 0.8)]:
+        path.write_text(json.dumps({
+            "graph_config_fingerprint": "graph123",
+            "results": [
+                {"split_id": "seed1_fold0", "result": {"test_auc": auc}},
+                {"split_id": "seed1_fold1", "result": {"test_auc": auc}},
+            ],
+        }), encoding="utf-8")
+    paired = build_paired_results(
+        [f"F1,ctmp_gin,a3tgcn,{candidate_path},{reference_path}"],
+        split_path,
+    )
+    comparison = paired["comparisons"][0]
+    assert comparison["n_train_values"] == [3, 4]
+    assert comparison["n_test_values"] == [1, 1]
+    assert comparison["split_sizes_constant"] is False
+    assert comparison["nb_test_train_ratio"] == pytest.approx(((1 / 3) + (1 / 4)) / 2)
+    paired_path = tmp_path / "paired.json"
+    paired_path.write_text(json.dumps(paired), encoding="utf-8")
+    analyzed = analyze_paired_results(str(paired_path))
+    assert analyzed["comparisons"][0]["raw"]["test_train_ratio"] == pytest.approx(comparison["nb_test_train_ratio"])
 
 
 def test_los_as_node_ctmp_path_uses_zero_edge_attributes():

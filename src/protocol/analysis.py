@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from .stats import bh_fdr_adjust, holm_adjust, nadeau_bengio_corrected_t, tost
 
 
@@ -51,6 +49,64 @@ def _parse_comparison_spec(spec: str) -> dict[str, str]:
     }
 
 
+def _unique_splits_by_id(splits: list[dict[str, Any]], *, context: str) -> dict[str, dict[str, Any]]:
+    by_split: dict[str, dict[str, Any]] = {}
+    for split in splits:
+        split_id = split.get("split_id")
+        if not split_id:
+            raise ValueError(f"{context} contains a split without split_id")
+        if split_id in by_split:
+            raise ValueError(f"{context} contains duplicate split_id: {split_id}")
+        by_split[str(split_id)] = split
+    return by_split
+
+
+def _unique_results_by_split_id(results: list[dict[str, Any]], *, context: str) -> dict[str, dict[str, Any]]:
+    by_split: dict[str, dict[str, Any]] = {}
+    for item in results:
+        split_id = item.get("split_id")
+        if not split_id:
+            raise ValueError(f"{context} contains a result without split_id")
+        if split_id in by_split:
+            raise ValueError(f"{context} contains duplicate split_id: {split_id}")
+        by_split[str(split_id)] = item["result"]
+    return by_split
+
+
+def _require_matching_graph_config(candidate_summary: dict[str, Any], reference_summary: dict[str, Any]) -> str:
+    candidate_graph = candidate_summary.get("graph_config_fingerprint")
+    reference_graph = reference_summary.get("graph_config_fingerprint")
+    if not candidate_graph or not reference_graph:
+        raise ValueError("evaluation summaries must include graph_config_fingerprint")
+    if candidate_graph != reference_graph:
+        raise ValueError(
+            "candidate/reference graph_config_fingerprint mismatch: "
+            f"{candidate_graph!r} != {reference_graph!r}"
+        )
+    return str(candidate_graph)
+
+
+def _split_size_summary(
+    split_meta: dict[str, dict[str, Any]],
+    split_ids: list[str],
+) -> dict[str, Any]:
+    n_train_values = [
+        len(split_meta[split_id]["train_idx"]) + len(split_meta[split_id].get("val_idx", []))
+        for split_id in split_ids
+    ]
+    n_test_values = [len(split_meta[split_id]["test_idx"]) for split_id in split_ids]
+    ratios = [float(n_test) / float(n_train) for n_train, n_test in zip(n_train_values, n_test_values)]
+    return {
+        "n_train": int(round(sum(n_train_values) / len(n_train_values))),
+        "n_test": int(round(sum(n_test_values) / len(n_test_values))),
+        "n_train_values": n_train_values,
+        "n_test_values": n_test_values,
+        "nb_test_train_ratios": ratios,
+        "nb_test_train_ratio": float(sum(ratios) / len(ratios)),
+        "split_sizes_constant": len(set(n_train_values)) == 1 and len(set(n_test_values)) == 1,
+    }
+
+
 def build_paired_results(
     comparison_specs: list[str | dict[str, str]],
     split_artifact_path: str | Path,
@@ -58,7 +114,7 @@ def build_paired_results(
     metric: str = "test_auc",
 ) -> dict[str, Any]:
     split_artifact = _load_summary(split_artifact_path)
-    split_meta = {split["split_id"]: split for split in split_artifact.get("splits", [])}
+    split_meta = _unique_splits_by_id(split_artifact.get("splits", []), context="split artifact")
     if not split_meta:
         raise ValueError("split artifact contains no evaluation splits")
 
@@ -67,9 +123,27 @@ def build_paired_results(
         spec = _parse_comparison_spec(raw_spec) if isinstance(raw_spec, str) else raw_spec
         candidate_summary = _load_summary(spec["candidate_summary"])
         reference_summary = _load_summary(spec["reference_summary"])
-        candidate_by_split = {item["split_id"]: item["result"] for item in candidate_summary.get("results", [])}
-        reference_by_split = {item["split_id"]: item["result"] for item in reference_summary.get("results", [])}
-        split_ids = [split_id for split_id in split_meta if split_id in candidate_by_split and split_id in reference_by_split]
+        graph_config_fingerprint = _require_matching_graph_config(candidate_summary, reference_summary)
+        candidate_by_split = _unique_results_by_split_id(
+            candidate_summary.get("results", []),
+            context=f"{spec.get('candidate')} summary",
+        )
+        reference_by_split = _unique_results_by_split_id(
+            reference_summary.get("results", []),
+            context=f"{spec.get('reference')} summary",
+        )
+        candidate_split_ids = set(candidate_by_split)
+        reference_split_ids = set(reference_by_split)
+        if candidate_split_ids != reference_split_ids:
+            raise ValueError(
+                f"unpaired split sets for {spec.get('candidate')} vs {spec.get('reference')}: "
+                f"candidate_only={sorted(candidate_split_ids - reference_split_ids)}, "
+                f"reference_only={sorted(reference_split_ids - candidate_split_ids)}"
+            )
+        unknown_split_ids = sorted(candidate_split_ids - set(split_meta))
+        if unknown_split_ids:
+            raise ValueError(f"result summaries contain split_ids absent from split artifact: {unknown_split_ids}")
+        split_ids = [split_id for split_id in split_meta if split_id in candidate_by_split]
         if not split_ids:
             raise ValueError(
                 f"no paired splits for {spec.get('candidate')} vs {spec.get('reference')}"
@@ -78,24 +152,26 @@ def build_paired_results(
         candidate_values = [_metric_from_result(candidate_by_split[split_id], metric) for split_id in split_ids]
         reference_values = [_metric_from_result(reference_by_split[split_id], metric) for split_id in split_ids]
         differences = [candidate - reference for candidate, reference in zip(candidate_values, reference_values)]
-        n_train_values = [
-            len(split_meta[split_id]["train_idx"]) + len(split_meta[split_id].get("val_idx", []))
-            for split_id in split_ids
-        ]
-        n_test_values = [len(split_meta[split_id]["test_idx"]) for split_id in split_ids]
+        split_size_summary = _split_size_summary(split_meta, split_ids)
         comparisons.append({
             "family": spec["family"],
             "candidate": spec["candidate"],
             "reference": spec["reference"],
             "metric": metric,
+            "graph_config_fingerprint": graph_config_fingerprint,
             "split_ids": split_ids,
+            "split_keys": [
+                {
+                    "split_id": split_id,
+                    "eval_seed": split_meta[split_id].get("eval_seed"),
+                    "fold": split_meta[split_id].get("fold"),
+                }
+                for split_id in split_ids
+            ],
             "candidate_values": candidate_values,
             "reference_values": reference_values,
             "differences": differences,
-            "n_train": int(round(float(np.mean(n_train_values)))),
-            "n_test": int(round(float(np.mean(n_test_values)))),
-            "n_train_values": n_train_values,
-            "n_test_values": n_test_values,
+            **split_size_summary,
         })
 
     return {
@@ -132,8 +208,13 @@ def analyze_paired_results(path: str, *, sesoi: float | None = None) -> dict[str
             "reference": record.get("reference"),
             "raw": nadeau_bengio_corrected_t(
                 record["differences"],
-                n_train=int(record["n_train"]),
-                n_test=int(record["n_test"]),
+                n_train=int(record["n_train"]) if "n_train" in record else None,
+                n_test=int(record["n_test"]) if "n_test" in record else None,
+                test_train_ratio=(
+                    float(record["nb_test_train_ratio"])
+                    if "nb_test_train_ratio" in record
+                    else None
+                ),
             ),
         }
         if family == "F4":
