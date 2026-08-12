@@ -12,6 +12,19 @@ REQUIRED_GRAPH_FIELDS = (
     "pruning_ratio",
     "estimator_version",
     "pilot_artifact_fingerprint",
+    "source_model_name",
+    "compatible_model_names",
+)
+
+DEFAULT_COMPATIBLE_MODEL_NAMES = (
+    "ctmp_gin",
+    "gin",
+    "a3tgcn",
+    "a3tgcn_2_points",
+    "gin_gru",
+    "gin_gru_2_points",
+    "mlp",
+    "xgboost",
 )
 
 
@@ -30,7 +43,30 @@ def hub_concentration(edge_index, node_cardinalities: list[int]) -> float:
     return float(incident.mean()) if incident.size else 0.0
 
 
-def write_graph_config(path: str, values: dict[str, Any], pilot_artifact: dict[str, Any]) -> dict[str, Any]:
+def _normalise_compatible_models(values: dict[str, Any], source_model_name: str) -> list[str]:
+    raw = values.get("compatible_model_names") or DEFAULT_COMPATIBLE_MODEL_NAMES
+    models = sorted({str(model) for model in raw})
+    if source_model_name not in models:
+        models.append(source_model_name)
+        models.sort()
+    return models
+
+
+def write_graph_config(
+    path: str,
+    values: dict[str, Any],
+    pilot_artifact: dict[str, Any],
+    *,
+    model_name: str | None = None,
+) -> dict[str, Any]:
+    source_model_name = str(
+        model_name
+        or values.get("source_model_name")
+        or pilot_artifact.get("model_name")
+        or ""
+    )
+    if not source_model_name:
+        raise ValueError("graph_config requires source_model_name/model_name")
     payload = {
         "score_method": values["score_method"],
         "threshold": float(values["threshold"]),
@@ -39,6 +75,8 @@ def write_graph_config(path: str, values: dict[str, Any], pilot_artifact: dict[s
         "estimator_version": values.get("estimator_version", "categorical_plugin_v1"),
         "pilot_study": values.get("pilot_study"),
         "pilot_artifact_fingerprint": pilot_artifact["artifact_fingerprint"],
+        "source_model_name": source_model_name,
+        "compatible_model_names": _normalise_compatible_models(values, source_model_name),
     }
     payload["graph_config_fingerprint"] = hashlib.blake2b(
         json.dumps(payload, sort_keys=True).encode("utf-8"), digest_size=12
@@ -49,7 +87,12 @@ def write_graph_config(path: str, values: dict[str, Any], pilot_artifact: dict[s
     return payload
 
 
-def load_graph_config(path: str, pilot_artifact: dict[str, Any] | None = None) -> dict[str, Any]:
+def load_graph_config(
+    path: str,
+    pilot_artifact: dict[str, Any] | None = None,
+    *,
+    model_name: str | None = None,
+) -> dict[str, Any]:
     target = Path(path)
     if not target.exists():
         raise FileNotFoundError(f"required graph_config.json is missing: {target}")
@@ -59,6 +102,16 @@ def load_graph_config(path: str, pilot_artifact: dict[str, Any] | None = None) -
         raise ValueError(f"graph_config.json missing fields: {missing}")
     if payload["score_method"] not in {"raw_mi", "nmi"}:
         raise ValueError("graph_config.score_method must be raw_mi or nmi")
+    compatible = payload.get("compatible_model_names")
+    if not isinstance(compatible, list) or not all(isinstance(model, str) for model in compatible):
+        raise ValueError("graph_config.compatible_model_names must be a list of model names")
+    if payload["source_model_name"] not in compatible:
+        raise ValueError("graph_config.source_model_name must be listed in compatible_model_names")
+    if model_name is not None and model_name not in set(compatible):
+        raise ValueError(
+            f"graph_config is not marked compatible with model {model_name!r}; "
+            f"compatible models: {compatible}"
+        )
     if pilot_artifact is not None and payload["pilot_artifact_fingerprint"] != pilot_artifact.get("artifact_fingerprint"):
         raise ValueError("graph_config does not match the pilot artifact")
     return payload

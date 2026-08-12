@@ -18,9 +18,9 @@ VARIANTS = {
     "B1": {"name": "bidirectional CT-edge", "hpo": False},
     "B3": {"name": "w/o merged stream", "hpo": False},
     "w/o_merged_stream": {"name": "w/o merged stream", "hpo": False},
-    "w/o_gated_fusion": {"name": "w/o GatedFusion", "hpo": False},
-    "w/o_mi_edge": {"name": "w/o MI edge", "hpo": False},
-    "w/o_preprocessing": {"name": "w/o preprocessing", "hpo": False},
+    "w/o_gated_fusion": {"name": "w/o GatedFusion", "hpo": True},
+    "w/o_mi_edge": {"name": "w/o MI edge", "hpo": True},
+    "w/o_preprocessing": {"name": "w/o preprocessing", "hpo": True},
 }
 
 

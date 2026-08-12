@@ -192,6 +192,43 @@ def _variant_cfg(cfg: dict[str, Any], variant: str) -> dict[str, Any]:
     return cfg if variant == "full" else apply_variant(cfg, variant)
 
 
+def _validate_selected_config_for_variant(
+    selected: dict[str, Any],
+    cfg: dict[str, Any],
+    variant: str,
+    selected_config_path: str,
+) -> None:
+    if variant not in VARIANTS:
+        raise ValueError(f"unknown protocol variant: {variant}")
+    selected_model = selected.get("model_name")
+    actual_model = cfg.get("model", {}).get("name")
+    if selected_model and actual_model and selected_model != actual_model:
+        raise ValueError(
+            f"{selected_config_path} was selected for model {selected_model!r}, "
+            f"but current config uses {actual_model!r}"
+        )
+
+    selected_variant = str(selected.get("variant", "full"))
+    if variant == "full":
+        if selected_variant != "full":
+            raise ValueError(
+                f"full evaluate requires a full selected config, got variant {selected_variant!r}"
+            )
+        return
+
+    if VARIANTS[variant].get("hpo", False) and selected_variant != variant:
+        raise ValueError(
+            f"{variant} requires its own top5-selected config from ablation-hpo/top5-reeval; "
+            f"{selected_config_path} has variant {selected_variant!r}"
+        )
+
+    if selected_variant not in {variant, "full"}:
+        raise ValueError(
+            f"{selected_config_path} has variant {selected_variant!r}, "
+            f"which cannot be used for evaluating {variant!r}"
+        )
+
+
 def _parse_eval_seeds(value: str | None) -> tuple[int, ...] | None:
     if value is None or value.strip() == "":
         return None
@@ -315,7 +352,7 @@ def run_hpo(
     if optuna is None:
         raise RuntimeError("Optuna is required for the hpo stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
-    graph_config = load_graph_config(graph_config_path)
+    graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
     storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
     requested_study_name = study_name or f"{cfg['model']['name']}_protocol"
     study_name = _namespaced_study_name(run_path, requested_study_name, study_prefix)
@@ -379,7 +416,7 @@ def run_top5(
     if optuna is None:
         raise RuntimeError("Optuna is required for the top5-reeval stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
-    graph_config = load_graph_config(graph_config_path)
+    graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
     storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
     requested_study_name = study_name or (
         f"{cfg['model']['name']}_{variant}" if variant != "full" else f"{cfg['model']['name']}_protocol"
@@ -500,6 +537,7 @@ def run_graph_pilot(
     if len(pilot_results) == 2 and abs(float(pilot_results[0]["value"]) - float(pilot_results[1]["value"])) <= 0.002:
         selected = min(pilot_results, key=lambda item: float(item["hub_concentration"]))
     pilot_artifact = {"pilot_results": pilot_results, "selected": selected}
+    pilot_artifact["model_name"] = cfg["model"]["name"]
     pilot_artifact["artifact_fingerprint"] = __import__("hashlib").blake2b(json.dumps(pilot_artifact, sort_keys=True).encode("utf-8"), digest_size=12).hexdigest()
     _write(run_path / "edge_pilot.json", pilot_artifact)
     return write_graph_config(
@@ -512,6 +550,7 @@ def run_graph_pilot(
             "pilot_study": selected["study_name"],
         },
         pilot_artifact,
+        model_name=cfg["model"]["name"],
     )
 
 
@@ -526,8 +565,9 @@ def run_evaluation(
     variant: str = "full",
 ):
     run_path, eval_artifact, _ = _require_artifacts(run_dir)
-    graph_config = load_graph_config(graph_config_path)
+    graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
     selected = load_json(selected_config_path)
+    _validate_selected_config_for_variant(selected, cfg, variant, selected_config_path)
     selected_cfg = apply_trial_params(cfg, selected["params"], graph_config)
     results = []
     splits = _select_eval_splits(eval_artifact, eval_seeds)
@@ -635,7 +675,9 @@ def main() -> None:
             raise SystemExit("--graph-config and a non-full --variant are required for ablation-hpo")
         if not VARIANTS[args.variant].get("hpo", False):
             raise SystemExit(f"{args.variant} uses inherited HPO; run ablation-evaluate instead")
-        warm_start = load_json(args.warm_start)["params"] if args.warm_start else None
+        if args.warm_start:
+            raise SystemExit("ablation-hpo must run an independent Optuna search; --warm-start is disabled")
+        warm_start = None
         variant_cfg = _variant_cfg(cfg, args.variant)
         run_hpo(
             variant_cfg,
