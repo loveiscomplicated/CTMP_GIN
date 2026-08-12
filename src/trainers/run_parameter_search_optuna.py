@@ -26,7 +26,11 @@ def _protocol_hint(args: argparse.Namespace) -> str:
     config = args.config or "<config.yaml>"
     run_dir = args.run_dir or "<run-dir>"
     graph_config = args.graph_config or f"{run_dir}/graph_config.json"
-    codebook = args.codebook or "<teds-d-codebook.json>"
+    codebook_note = (
+        f"To reuse an external vocabulary, add --codebook {args.codebook}."
+        if args.codebook
+        else f"If --codebook is omitted, the runner writes {run_dir}/codebook.json automatically."
+    )
     study_name = args.study_name or "<model>_protocol"
     n_trials = args.n_trials or 100
     storage = args.storage or "$PROTOCOL_OPTUNA_STORAGE"
@@ -39,17 +43,19 @@ def _protocol_hint(args: argparse.Namespace) -> str:
         separation, graph-pilot artifacts, codebook vocabularies, or the fixed
         comparison/ablation policy.
 
+        {codebook_note}
+
         Use the protocol runner instead, for example:
 
           uv run python -m src.protocol.runner --stage prepare \\
-            --config {config} --root src/data --run-dir {run_dir} --codebook {codebook}
+            --config {config} --root src/data --run-dir {run_dir}
 
           uv run python -m src.protocol.runner --stage edge-pilot \\
-            --config {config} --root src/data --run-dir {run_dir} --codebook {codebook}
+            --config {config} --root src/data --run-dir {run_dir}
 
           uv run python -m src.protocol.runner --stage hpo \\
             --config {config} --root src/data --run-dir {run_dir} \\
-            --codebook {codebook} --graph-config {graph_config} \\
+            --graph-config {graph_config} \\
             --study-name {study_name} --n-trials {n_trials} \\
             --storage {storage}
         """

@@ -16,8 +16,9 @@ PROTOCOL_OPTUNA_STORAGE="${PROTOCOL_OPTUNA_STORAGE:-${OPTUNA_STORAGE:-}}"
 export PROTOCOL_OPTUNA_STORAGE
 export RUN_DIR
 
-[[ -n "$CODEBOOK_PATH" ]] || fail "CODEBOOK_PATH must point to the protocol codebook JSON"
-[[ -f "$CODEBOOK_PATH" ]] || fail "CODEBOOK_PATH does not exist: $CODEBOOK_PATH"
+if [[ -n "$CODEBOOK_PATH" && ! -f "$CODEBOOK_PATH" ]]; then
+  fail "CODEBOOK_PATH does not exist: $CODEBOOK_PATH"
+fi
 [[ -n "$PROTOCOL_OPTUNA_STORAGE" ]] || fail "PROTOCOL_OPTUNA_STORAGE must be set to a PostgreSQL Optuna URL"
 case "$PROTOCOL_OPTUNA_STORAGE" in
   postgresql://*|postgresql+*://*|postgres://*) ;;
@@ -31,7 +32,11 @@ esac
 info "run_dir=$RUN_DIR"
 info "root=$ROOT"
 info "config=$CONFIG"
-info "codebook=$CODEBOOK_PATH"
+if [[ -n "$CODEBOOK_PATH" ]]; then
+  info "codebook=$CODEBOOK_PATH"
+else
+  info "codebook=auto-generated at ${RUN_DIR}/codebook.json"
+fi
 
 info "running pytest"
 "$PYTHON_BIN" -m pytest tests/ -q
@@ -57,21 +62,31 @@ print(f"SMOKE PASS: PostgreSQL Optuna storage reachable; study={study_name}")
 PY
 
 info "running protocol prepare"
-"$PYTHON_BIN" -m src.protocol.runner \
-  --stage prepare \
-  --config "$CONFIG" \
-  --root "$ROOT" \
-  --run-dir "$RUN_DIR" \
-  --codebook "$CODEBOOK_PATH"
+PREPARE_CMD=(
+  "$PYTHON_BIN" -m src.protocol.runner
+  --stage prepare
+  --config "$CONFIG"
+  --root "$ROOT"
+  --run-dir "$RUN_DIR"
+)
+if [[ -n "$CODEBOOK_PATH" ]]; then
+  PREPARE_CMD+=(--codebook "$CODEBOOK_PATH")
+fi
+"${PREPARE_CMD[@]}"
 pass "prepare completed"
 
 info "running protocol preflight"
-"$PYTHON_BIN" -m src.protocol.runner \
-  --stage preflight \
-  --config "$CONFIG" \
-  --root "$ROOT" \
-  --run-dir "$RUN_DIR" \
-  --codebook "$CODEBOOK_PATH"
+PREFLIGHT_CMD=(
+  "$PYTHON_BIN" -m src.protocol.runner
+  --stage preflight
+  --config "$CONFIG"
+  --root "$ROOT"
+  --run-dir "$RUN_DIR"
+)
+if [[ -n "$CODEBOOK_PATH" ]]; then
+  PREFLIGHT_CMD+=(--codebook "$CODEBOOK_PATH")
+fi
+"${PREFLIGHT_CMD[@]}"
 pass "preflight completed"
 
 info "checking real split sizes and paired-statistics path"

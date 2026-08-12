@@ -17,6 +17,7 @@ from src.protocol.runner import (
     _namespaced_study_name,
     _parse_eval_seeds,
     _redact_storage,
+    _ensure_protocol_codebook,
     _require_protocol_codebook,
     _resolve_optuna_storage,
     _select_eval_splits,
@@ -25,7 +26,8 @@ from src.protocol.runner import (
     _variant_cfg,
 )
 from src.protocol.stats import bh_fdr_adjust, holm_adjust, nadeau_bengio_corrected_t, tost
-from src.protocol.vocabulary import encode_with_codebook
+from src.protocol.vocabulary import encode_with_codebook, load_codebook, write_codebook_from_csv
+import src.protocol.runner as protocol_runner
 from src.data_processing.edge import fully_connected_edge_index, fully_connected_pair_edge_index
 from src.models.a3tgcn.a3tgcn_2_points import A3TGCN_2_points
 from src.models.ctmp_gin.model import CTMPGIN
@@ -87,6 +89,118 @@ def test_protocol_runner_requires_codebook_for_data_stages(tmp_path):
     cfg = {"data": {"codebook_path": str(codebook)}}
     _require_protocol_codebook(cfg, "hpo")
     assert cfg["codebook_path"] == str(codebook)
+
+
+def test_protocol_auto_generates_codebook_from_preprocessed_source(tmp_path):
+    root = tmp_path / "data"
+    raw = root / "raw"
+    raw.mkdir(parents=True)
+    pd.DataFrame({
+        "DISYR": [2022, 2022],
+        "CASEID": [1, 2],
+        "A": [2, 1],
+        "LOS": [1, 2],
+        "REASON": [1, 2],
+    }).to_csv(raw / "TEDS_Discharge.csv", index=False)
+    pd.DataFrame({
+        "DISYR": [2022, 2022],
+        "CASEID": [1, 2],
+        "A": [3, 1],
+        "LOS": [1, 3],
+        "REASON": [1, 2],
+    }).to_csv(raw / "missing_corrected.csv", index=False)
+
+    cfg = {"train": {"do_preprocess": True}}
+    _ensure_protocol_codebook(cfg, "prepare", str(root), str(tmp_path / "run"))
+
+    codebook_path = tmp_path / "run" / "codebook.json"
+    assert cfg["codebook_path"] == str(codebook_path.resolve())
+    assert load_codebook(str(codebook_path)) == {"A": [1, 3], "LOS": [1, 3]}
+
+
+def test_protocol_auto_codebook_runs_preprocessing_when_cache_missing(tmp_path, monkeypatch):
+    root = tmp_path / "data"
+    raw = root / "raw"
+    raw.mkdir(parents=True)
+    pd.DataFrame({
+        "DISYR": [2022, 2022],
+        "CASEID": [1, 2],
+        "A": [-9, 1],
+        "LOS": [1, 2],
+        "REASON": [1, 2],
+    }).to_csv(raw / "TEDS_Discharge.csv", index=False)
+    calls = []
+
+    def fake_preprocess(raw_path, missing_path):
+        calls.append((raw_path, missing_path))
+        return pd.DataFrame({
+            "DISYR": [2022, 2022],
+            "CASEID": [1, 2],
+            "A": [0, 1],
+            "LOS": [1, 2],
+            "REASON": [1, 2],
+        })
+
+    monkeypatch.setattr(protocol_runner, "tackle_missing_value_wrapper", fake_preprocess)
+
+    cfg = {"train": {"do_preprocess": True}}
+    _ensure_protocol_codebook(cfg, "prepare", str(root), str(tmp_path / "run"))
+
+    assert calls == [(str(raw / "TEDS_Discharge.csv"), str(raw / "missing_corrected.csv"))]
+    assert load_codebook(str(tmp_path / "run" / "codebook.json")) == {"A": [0, 1], "LOS": [1, 2]}
+
+
+def test_protocol_auto_codebook_reuses_existing_file(tmp_path, monkeypatch):
+    existing = tmp_path / "run" / "codebook.json"
+    existing.parent.mkdir(parents=True)
+    existing.write_text('{"A": [1]}', encoding="utf-8")
+    monkeypatch.setattr(
+        protocol_runner,
+        "tackle_missing_value_wrapper",
+        lambda *_: pytest.fail("existing auto codebook should be reused"),
+    )
+
+    cfg = {"train": {"do_preprocess": True}}
+    _ensure_protocol_codebook(cfg, "hpo", str(tmp_path / "data"), str(tmp_path / "run"))
+
+    assert cfg["codebook_path"] == str(existing.resolve())
+
+
+def test_protocol_auto_codebook_uses_variant_specific_target(tmp_path):
+    root = tmp_path / "data"
+    raw = root / "raw"
+    raw.mkdir(parents=True)
+    pd.DataFrame({
+        "DISYR": [2022, 2022],
+        "CASEID": [1, 2],
+        "A": [-9, 1],
+        "LOS": [1, 2],
+        "REASON": [1, 2],
+    }).to_csv(raw / "TEDS_Discharge.csv", index=False)
+
+    cfg = {"train": {"do_preprocess": False}}
+    _ensure_protocol_codebook(
+        cfg,
+        "ablation-hpo",
+        str(root),
+        str(tmp_path / "run"),
+        variant="w/o_preprocessing",
+    )
+
+    codebook_path = tmp_path / "run" / "codebooks" / "w_o_preprocessing.json"
+    assert cfg["codebook_path"] == str(codebook_path.resolve())
+    assert load_codebook(str(codebook_path)) == {"A": [-9, 1], "LOS": [1, 2]}
+
+
+def test_write_codebook_from_csv_omits_id_and_label_columns(tmp_path):
+    source = tmp_path / "source.csv"
+    source.write_text(
+        "DISYR,CASEID,A,REASON\n2022,1,2,1\n2022,2,1,2\n",
+        encoding="utf-8",
+    )
+    report = write_codebook_from_csv(source, tmp_path / "codebook.json")
+    assert report["feature_columns"] == 1
+    assert load_codebook(str(tmp_path / "codebook.json")) == {"A": [1, 2]}
 
 
 def test_protocol_optuna_storage_requires_explicit_parallel_safe_backend(tmp_path, monkeypatch):

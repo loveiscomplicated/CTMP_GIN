@@ -7,6 +7,9 @@ from typing import Any
 import pandas as pd
 
 
+IGNORED_CODEBOOK_COLUMNS = {"DISYR", "CASEID", "REASON", "REASONb"}
+
+
 def load_codebook(path: str) -> dict[str, list[Any]]:
     target = Path(path)
     if not target.exists():
@@ -43,6 +46,65 @@ def encode_with_codebook(frame: pd.DataFrame, codebook: dict[str, list[Any]], *,
         replacement = len(mapping) if oov_value is None else oov_value
         encoded[column] = mapped.fillna(replacement).astype(int)
     return encoded, oov_counts
+
+
+def _json_scalar(value: Any) -> Any:
+    if pd.isna(value):
+        return None
+    item = value.item() if hasattr(value, "item") else value
+    if isinstance(item, float) and item.is_integer():
+        return int(item)
+    return item
+
+
+def _sort_key(value: Any) -> tuple[int, Any]:
+    if isinstance(value, bool):
+        return (0, int(value))
+    if isinstance(value, int | float):
+        return (1, float(value))
+    if value is None:
+        return (2, "")
+    return (3, str(value))
+
+
+def build_codebook_from_frame(frame: pd.DataFrame) -> dict[str, list[Any]]:
+    codebook: dict[str, list[Any]] = {}
+    for column in frame.columns:
+        if column in IGNORED_CODEBOOK_COLUMNS:
+            continue
+        values = [_json_scalar(value) for value in frame[column].dropna().unique().tolist()]
+        codebook[str(column)] = sorted(values, key=_sort_key)
+    return codebook
+
+
+def write_codebook_from_frame(
+    frame: pd.DataFrame,
+    output_path: str | Path,
+    *,
+    source_csv: str | Path | None = None,
+) -> dict[str, Any]:
+    codebook = build_codebook_from_frame(frame)
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(codebook, ensure_ascii=False, indent=2), encoding="utf-8")
+    report: dict[str, Any] = {
+        "path": str(target.resolve()),
+        "feature_columns": len(codebook),
+    }
+    if source_csv is not None:
+        report["source_csv"] = str(Path(source_csv).resolve())
+    return report
+
+
+def write_codebook_from_csv(
+    source_csv: str | Path,
+    output_path: str | Path,
+) -> dict[str, Any]:
+    source = Path(source_csv)
+    if not source.exists():
+        raise FileNotFoundError(f"codebook source CSV does not exist: {source}")
+    frame = pd.read_csv(source)
+    return write_codebook_from_frame(frame, output_path, source_csv=source)
 
 
 def preflight_codebook(frame: pd.DataFrame, codebook_path: str) -> dict[str, Any]:

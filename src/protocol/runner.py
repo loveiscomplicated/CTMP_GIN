@@ -20,6 +20,7 @@ try:
 except ImportError:  # prepare/preflight should remain usable without HPO dependencies.
     optuna = None  # type: ignore[assignment]
 
+from src.data_processing.tackle_missing_value import tackle_missing_value_wrapper
 from src.data_processing.tensor_dataset import TEDSTensorDataset
 from src.models.factory import build_edge
 from src.trainers.run_single_experiment import run_single_experiment
@@ -31,6 +32,7 @@ from .hpo import apply_trial_params, suggest_protocol_params
 from .preflight import run_preflight
 from .analysis import analyze_paired_results, build_paired_results
 from .ablations import VARIANTS, apply_variant
+from .vocabulary import write_codebook_from_csv, write_codebook_from_frame
 
 
 DATA_STAGES = {
@@ -154,6 +156,50 @@ def _worker_id() -> str:
 
 def _resolve_codebook_path(cfg: dict[str, Any]) -> str | None:
     return cfg.get("codebook_path") or (cfg.get("data") or {}).get("codebook_path")
+
+
+def _write_auto_protocol_codebook(root: str, cfg: dict[str, Any], output_path: str | Path) -> dict[str, Any]:
+    raw_dir = Path(root) / "raw"
+    raw_data_path = raw_dir / "TEDS_Discharge.csv"
+    missing_corrected_path = raw_dir / "missing_corrected.csv"
+    if cfg.get("train", {}).get("do_preprocess", True):
+        frame = tackle_missing_value_wrapper(str(raw_data_path), str(missing_corrected_path))
+        return write_codebook_from_frame(frame, output_path, source_csv=missing_corrected_path)
+    return write_codebook_from_csv(raw_data_path, output_path)
+
+
+def _auto_codebook_target(run_dir: str, variant: str = "full") -> Path:
+    if variant == "full":
+        return Path(run_dir) / "codebook.json"
+    return Path(run_dir) / "codebooks" / f"{_safe_filename(variant)}.json"
+
+
+def _ensure_protocol_codebook(
+    cfg: dict[str, Any],
+    stage: str,
+    root: str | None,
+    run_dir: str | None,
+    *,
+    variant: str = "full",
+) -> None:
+    if stage not in DATA_STAGES:
+        return
+    codebook_path = _resolve_codebook_path(cfg)
+    if codebook_path and not Path(codebook_path).exists():
+        raise SystemExit(f"codebook does not exist: {codebook_path}")
+    if not codebook_path:
+        if not root or not run_dir:
+            raise SystemExit("--root and --run-dir are required to auto-generate protocol codebook")
+        codebook_target = _auto_codebook_target(run_dir, variant)
+        if codebook_target.exists():
+            resolved = str(codebook_target.resolve())
+        else:
+            report = _write_auto_protocol_codebook(root, cfg, codebook_target)
+            resolved = report["path"]
+        cfg.setdefault("data", {})["codebook_path"] = resolved
+        cfg["codebook_path"] = resolved
+        return
+    cfg["codebook_path"] = codebook_path
 
 
 def _require_protocol_codebook(cfg: dict[str, Any], stage: str) -> None:
@@ -640,13 +686,15 @@ def main() -> None:
             cfg["codebook_path"] = args.codebook
     else:
         cfg = {}
-    _require_protocol_codebook(cfg, args.stage)
     if args.stage == "preflight":
+        _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
         _, labels = _dataset(cfg, args.root)
         run_preflight(args.run_dir, labels, require_graph=Path(args.run_dir, "graph_config.json").exists())
     elif args.stage == "prepare":
+        _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
         prepare_artifacts(cfg, args.root, args.run_dir)
     elif args.stage == "edge-pilot":
+        _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
         run_graph_pilot(
             cfg,
             args.root,
@@ -659,6 +707,7 @@ def main() -> None:
     elif args.stage == "hpo":
         if not args.graph_config:
             raise SystemExit("--graph-config is required for hpo")
+        _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
         run_hpo(
             cfg,
             args.root,
@@ -679,6 +728,7 @@ def main() -> None:
             raise SystemExit("ablation-hpo must run an independent Optuna search; --warm-start is disabled")
         warm_start = None
         variant_cfg = _variant_cfg(cfg, args.variant)
+        _ensure_protocol_codebook(variant_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
         run_hpo(
             variant_cfg,
             args.root,
@@ -695,8 +745,10 @@ def main() -> None:
     elif args.stage == "top5-reeval":
         if not args.graph_config:
             raise SystemExit("--graph-config is required for top5-reeval")
+        variant_cfg = _variant_cfg(cfg, args.variant)
+        _ensure_protocol_codebook(variant_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
         run_top5(
-            _variant_cfg(cfg, args.variant),
+            variant_cfg,
             args.root,
             args.run_dir,
             args.graph_config,
@@ -709,6 +761,7 @@ def main() -> None:
     elif args.stage == "evaluate":
         if not args.graph_config or not args.selected_config:
             raise SystemExit("--graph-config and --selected-config are required for evaluate")
+        _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
         run_evaluation(
             cfg,
             args.root,
@@ -721,8 +774,10 @@ def main() -> None:
     elif args.stage == "ablation-evaluate":
         if not args.graph_config or not args.selected_config or not args.variant or args.variant == "full":
             raise SystemExit("--graph-config, --selected-config, and a non-full --variant are required")
+        variant_cfg = _variant_cfg(cfg, args.variant)
+        _ensure_protocol_codebook(variant_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
         run_evaluation(
-            _variant_cfg(cfg, args.variant),
+            variant_cfg,
             args.root,
             args.run_dir,
             args.graph_config,
