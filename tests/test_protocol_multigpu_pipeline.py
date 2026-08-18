@@ -8,6 +8,7 @@ from scripts.protocol_multigpu_pipeline import (
     ProtocolPipeline,
     build_parser,
     detect_gpus,
+    log_tail,
     require_postgresql_storage,
 )
 
@@ -76,3 +77,28 @@ def test_pipeline_defaults_exclude_xgboost_and_assign_one_visible_gpu(tmp_path, 
     env = pipeline.job_env("2")
     assert env["CUDA_VISIBLE_DEVICES"] == "2"
     assert "," not in env["CUDA_VISIBLE_DEVICES"]
+
+
+def test_validate_requires_raw_csv(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+    root = tmp_path / "data"
+    (root / "raw").mkdir(parents=True)
+    args = build_parser().parse_args([
+        "--run-dir",
+        str(tmp_path / "run"),
+        "--root",
+        str(root),
+        "--gpus",
+        "0",
+        "--storage",
+        "postgresql://user:pass@host/db",
+        "--dry-run",
+    ])
+    with pytest.raises(SystemExit, match="raw data file does not exist"):
+        ProtocolPipeline(args).validate()
+
+
+def test_log_tail_limits_output(tmp_path) -> None:
+    path = tmp_path / "job.log"
+    path.write_text("\n".join(f"line {index}" for index in range(10)), encoding="utf-8")
+    assert log_tail(path, max_lines=3) == "line 7\nline 8\nline 9"

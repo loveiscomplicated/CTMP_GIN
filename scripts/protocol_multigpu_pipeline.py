@@ -116,6 +116,14 @@ def expected_eval_split_ids() -> list[str]:
     return [f"seed{seed}_fold{fold}" for seed in EVAL_SEEDS for fold in range(EVAL_FOLDS)]
 
 
+def log_tail(path: Path, max_lines: int = 80) -> str:
+    if not path.exists():
+        return f"log file does not exist: {path}"
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    tail = "\n".join(lines[-max_lines:])
+    return tail or "(log file is empty)"
+
+
 @dataclass(frozen=True)
 class RunContext:
     key: str
@@ -205,8 +213,12 @@ class ProtocolPipeline:
 
     def validate(self) -> None:
         self.notifier.require_ready()
-        if not (self.root / "raw").is_dir():
-            raise SystemExit(f"ROOT/raw does not exist: {self.root / 'raw'}")
+        raw_dir = self.root / "raw"
+        raw_csv = raw_dir / "TEDS_Discharge.csv"
+        if not raw_dir.is_dir():
+            raise SystemExit(f"ROOT/raw does not exist: {raw_dir}")
+        if not raw_csv.is_file():
+            raise SystemExit(f"raw data file does not exist: {raw_csv}")
         for config in MAIN_MODELS.values():
             if not Path(config).is_file():
                 raise SystemExit(f"missing config: {config}")
@@ -323,6 +335,9 @@ class ProtocolPipeline:
             rc = proc.wait()
         if rc != 0:
             self.notifier.send(f"[JOB_FAIL] {name} rc={rc} log={log_path}")
+            tail = log_tail(log_path)
+            print(f"----- tail {log_path} -----\n{tail}\n----- end tail -----", flush=True)
+            self.notifier.send(f"[JOB_FAIL_TAIL] {name}\n```text\n{tail[-1800:]}\n```")
             raise SystemExit(rc)
         self.notifier.send(f"[JOB_DONE] {name} log={log_path}")
 
@@ -401,6 +416,10 @@ class ProtocolPipeline:
                     log_path = getattr(proc, "_protocol_log_path", "unknown")
                     if rc != 0:
                         self.notifier.send(f"[JOB_FAIL] {job.name} gpu={gpu} rc={rc} log={log_path}")
+                        if isinstance(log_path, Path):
+                            tail = log_tail(log_path)
+                            print(f"----- tail {log_path} -----\n{tail}\n----- end tail -----", flush=True)
+                            self.notifier.send(f"[JOB_FAIL_TAIL] {job.name}\n```text\n{tail[-1800:]}\n```")
                         self.terminate_active()
                         raise SystemExit(rc)
                     completed += 1
