@@ -26,6 +26,24 @@ from scripts.request_mi import (
     _artifact_key,
     _mi_remove_los_for_cfg as _request_mi_remove_los_for_cfg,
 )
+import src.data_processing.canonical_teds as canonical_teds
+
+
+def test_teds_bundle_cache_save_is_best_effort(tmp_path, monkeypatch, capsys) -> None:
+    cache_path = tmp_path / "cache.pt"
+    original_save = torch.save
+
+    def fail_save(bundle, path):
+        original_save({"partial": True}, path)
+        raise RuntimeError("zip writer failed")
+
+    monkeypatch.setattr(canonical_teds.torch, "save", fail_save)
+
+    canonical_teds._save_bundle_cache(str(cache_path), object())
+
+    assert not cache_path.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+    assert "failed to save dataset cache" in capsys.readouterr().out
 
 
 def test_mi_top_k_uses_descending_mi_values() -> None:

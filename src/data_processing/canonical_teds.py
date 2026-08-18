@@ -112,10 +112,19 @@ def _load_bundle_cache(cache_path: str) -> CanonicalTEDSBundle | None:
 
 
 def _save_bundle_cache(cache_path: str, bundle: CanonicalTEDSBundle) -> None:
+    if os.environ.get("TEDS_DISABLE_PROCESSED_CACHE") == "1":
+        return
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     tmp_path = f"{cache_path}.{os.getpid()}.tmp"
-    torch.save(bundle, tmp_path)
-    os.replace(tmp_path, cache_path)
+    try:
+        torch.save(bundle, tmp_path)
+        os.replace(tmp_path, cache_path)
+    except Exception as exc:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        print(f"Warning: failed to save dataset cache {cache_path}: {exc}")
 
 
 def build_canonical_teds_bundle(
