@@ -124,6 +124,29 @@ def log_tail(path: Path, max_lines: int = 80) -> str:
     return tail or "(log file is empty)"
 
 
+def existing_log_counter(log_dir: Path) -> int:
+    if not log_dir.exists():
+        return 0
+    max_counter = 0
+    for path in log_dir.glob("*.log"):
+        match = re.match(r"(\d+)_", path.name)
+        if match:
+            max_counter = max(max_counter, int(match.group(1)))
+    return max_counter
+
+
+def json_artifact_complete(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size <= 0:
+        return False
+    if path.suffix != ".json":
+        return True
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class RunContext:
     key: str
@@ -208,7 +231,7 @@ class ProtocolPipeline:
             args.discord_bot_name,
             dry_run=self.dry_run,
         )
-        self.job_counter = 0
+        self.job_counter = existing_log_counter(self.log_dir) if self.resume else 0
         self._active: list[tuple[str, Job, subprocess.Popen]] = []
 
     def validate(self) -> None:
@@ -441,7 +464,12 @@ class ProtocolPipeline:
         self.notifier.send(f"[STAGE_DONE] {stage_name}: completed={completed}/{len(jobs)}")
 
     def artifact_done(self, path: Path) -> bool:
-        return self.resume and path.exists()
+        if not self.resume:
+            return False
+        complete = json_artifact_complete(path)
+        if path.exists() and not complete:
+            self.notifier.send(f"[RESUME_REDO] incomplete artifact will be rebuilt: {path}")
+        return complete
 
     def prepare_and_preflight(self, contexts: list[RunContext]) -> None:
         self.notifier.send(f"[STAGE_START] prepare/preflight contexts={len(contexts)}")
@@ -616,6 +644,10 @@ class ProtocolPipeline:
                 comparisons.append(f"F4,{ctx.label},ctmp_gin,{ctx.evaluation_summary},{ctmp.evaluation_summary}")
 
         paired_path = self.run_dir / "paired_results.json"
+        analysis_path = self.run_dir / "statistical_analysis.json"
+        if self.artifact_done(paired_path) and self.artifact_done(analysis_path):
+            self.notifier.send("[STAGE_SKIP] pair-results/analyze already complete")
+            return
         cmd = [
             self.python_bin,
             "-m",
@@ -631,7 +663,10 @@ class ProtocolPipeline:
         ]
         for comparison in comparisons:
             cmd.extend(["--comparison", comparison])
-        self.run_command("pair-results", cmd)
+        if not self.artifact_done(paired_path):
+            self.run_command("pair-results", cmd)
+        else:
+            self.notifier.send("[STAGE_SKIP] pair-results already complete")
 
         analyze_cmd = [
             self.python_bin,
@@ -646,7 +681,10 @@ class ProtocolPipeline:
         ]
         if self.args.sesoi is not None:
             analyze_cmd.extend(["--sesoi", str(self.args.sesoi)])
-        self.run_command("analyze", analyze_cmd)
+        if not self.artifact_done(analysis_path):
+            self.run_command("analyze", analyze_cmd)
+        else:
+            self.notifier.send("[STAGE_SKIP] analyze already complete")
 
     def write_plan(self, main_contexts: list[RunContext], ablation_contexts: list[RunContext]) -> None:
         payload = {
@@ -674,7 +712,9 @@ class ProtocolPipeline:
         self.write_plan(main_contexts, ablation_contexts)
         self.notifier.send(
             f"[PIPELINE_START] run_dir={self.run_dir} gpus={','.join(self.gpus)} "
-            f"main={len(main_contexts)} ablations={len(ablation_contexts)} xgboost=excluded"
+            f"main={len(main_contexts)} ablations={len(ablation_contexts)} "
+            f"resume={'on' if self.resume else 'off'} next_log={self.job_counter + 1:04d} "
+            f"xgboost=excluded"
         )
         self.prepare_and_preflight(all_contexts)
         self.run_edge_pilot()

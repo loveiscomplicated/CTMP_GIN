@@ -8,6 +8,8 @@ from scripts.protocol_multigpu_pipeline import (
     ProtocolPipeline,
     build_parser,
     detect_gpus,
+    existing_log_counter,
+    json_artifact_complete,
     log_tail,
     require_postgresql_storage,
 )
@@ -102,3 +104,35 @@ def test_log_tail_limits_output(tmp_path) -> None:
     path = tmp_path / "job.log"
     path.write_text("\n".join(f"line {index}" for index in range(10)), encoding="utf-8")
     assert log_tail(path, max_lines=3) == "line 7\nline 8\nline 9"
+
+
+def test_resume_helpers_validate_json_and_continue_log_numbering(tmp_path, monkeypatch) -> None:
+    valid = tmp_path / "valid.json"
+    invalid = tmp_path / "invalid.json"
+    valid.write_text('{"ok": true}', encoding="utf-8")
+    invalid.write_text("{broken", encoding="utf-8")
+    assert json_artifact_complete(valid)
+    assert not json_artifact_complete(invalid)
+
+    log_dir = tmp_path / "run" / "launcher_logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "0007_prepare.log").write_text("", encoding="utf-8")
+    (log_dir / "0012_hpo.log").write_text("", encoding="utf-8")
+    assert existing_log_counter(log_dir) == 12
+
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
+    args = build_parser().parse_args([
+        "--run-dir",
+        str(tmp_path / "run"),
+        "--root",
+        "src/data",
+        "--gpus",
+        "0",
+        "--storage",
+        "postgresql://user:pass@host/db",
+        "--dry-run",
+    ])
+    pipeline = ProtocolPipeline(args)
+    assert pipeline.job_counter == 12
+    assert pipeline.artifact_done(valid)
+    assert not pipeline.artifact_done(invalid)
