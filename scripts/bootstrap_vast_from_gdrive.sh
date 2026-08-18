@@ -17,9 +17,8 @@ REPO_URL="https://github.com/loveiscomplicated/CTMP_GIN.git"
 REPO_DIR="${WORKSPACE_ROOT}/CTMP_GIN"
 BRANCH="main"
 
-CONDA_DIR="$HOME/miniconda3"
-CONDA_SH="${CONDA_DIR}/etc/profile.d/conda.sh"
-ENV_NAME="pyg_2"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+PROJECT_SPEC="${PROJECT_SPEC:-.[dev]}"
 
 RAW_DATA_DIR="${REPO_DIR}/src/data/raw"
 RUNS_DIR="${REPO_DIR}/runs"
@@ -38,7 +37,7 @@ download_drive_file() {
     return 0
   fi
   echo "[$(ts)] downloading Google Drive file -> $output_path"
-  gdown "https://drive.google.com/uc?id=${file_id}" -O "$output_path"
+  "$PYTHON_BIN" -m gdown "https://drive.google.com/uc?id=${file_id}" -O "$output_path"
 }
 
 extract_run_archive() {
@@ -56,7 +55,7 @@ mkdir -p "$WORKSPACE_ROOT" "$DOWNLOAD_DIR"
 cd "$WORKSPACE_ROOT"
 
 apt update
-apt install -y git wget
+apt install -y git wget python3-pip python3-dev python-is-python3 build-essential
 
 if [[ -d "${REPO_DIR}/.git" ]]; then
   echo "[$(ts)] repo exists -> update"
@@ -71,45 +70,8 @@ fi
 git checkout "$BRANCH"
 git pull origin "$BRANCH"
 
-if [[ ! -d "$CONDA_DIR" ]]; then
-  echo "[$(ts)] installing miniconda"
-  wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-  bash Miniconda3-latest-Linux-x86_64.sh -b -p "$CONDA_DIR"
-fi
-
-source "$CONDA_SH"
-conda activate base || true
-conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
-conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
-
-if ! conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
-  conda create -y -n "$ENV_NAME" python=3.12 pip
-fi
-
-conda activate "$ENV_NAME"
-python -m pip install -U pip
-
-CUDA_RAW=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]*\)\.\([0-9]*\).*/\1\2/' || echo "")
-if [[ -z "$CUDA_RAW" ]]; then
-  CUDA_RAW=$(nvidia-smi 2>/dev/null | grep "CUDA Version" | sed 's/.*CUDA Version: \([0-9]*\)\.\([0-9]*\).*/\1\2/' || echo "")
-fi
-
-case "$CUDA_RAW" in
-  128|129) CUDA_TAG="cu128" ;;
-  126|127) CUDA_TAG="cu126" ;;
-  *) CUDA_TAG="cu124" ;;
-esac
-
-echo "[$(ts)] detected CUDA tag: $CUDA_TAG"
-pip install torch torchvision --index-url "https://download.pytorch.org/whl/${CUDA_TAG}"
-pip install torch-geometric
-TORCH_VER=$(python -c "import torch; print(torch.__version__.split('+')[0])")
-pip install torch-scatter torch-sparse torch-cluster \
-  -f "https://data.pyg.org/whl/torch-${TORCH_VER}+${CUDA_TAG}.html"
-
 cd "$REPO_DIR"
-pip install -r requirements.txt
-pip install requests gdown
+PYTHON_BIN="$PYTHON_BIN" PROJECT_SPEC="$PROJECT_SPEC" bash scripts/install_pip.sh
 
 mkdir -p "$RAW_DATA_DIR" "$RUNS_DIR"
 
@@ -132,4 +94,4 @@ echo "[$(ts)] repo    : $REPO_DIR"
 echo "[$(ts)] data    : ${RAW_DATA_DIR}/TEDS_Discharge.csv"
 echo "[$(ts)] CE ckpt : ${RUNS_DIR}/${CE_RUN_ID}/checkpoints/best.pt"
 echo "[$(ts)] focal   : ${RUNS_DIR}/${FOCAL_RUN_ID}/checkpoints/best.pt"
-echo "[$(ts)] next    : source ${CONDA_SH} && conda activate ${ENV_NAME}"
+echo "[$(ts)] next    : cd ${REPO_DIR}"

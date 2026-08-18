@@ -35,10 +35,24 @@ Large/raw data is intentionally not tracked in this split repository.
 
 ## Environment
 
+Conda is not required. For local CPU/MPS usage:
+
 ```bash
-conda env create -f environment.yml
-conda activate pyg_2
-pip install -r requirements.txt
+python3 -m pip install -U pip
+python3 -m pip install .
+```
+
+For development/tests:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+For VastAI/CUDA, use the helper so PyTorch and PyG wheels are installed from
+the matching wheel indexes:
+
+```bash
+bash scripts/install_pip.sh
 ```
 
 Quick dependency check:
@@ -47,6 +61,10 @@ Quick dependency check:
 python -c "import torch; print(torch.__version__)"
 python -c "import torch_geometric; print(torch_geometric.__version__)"
 ```
+
+`rclone` is a system command, not a Python package. Install it with the OS
+package manager when you need Google Drive upload/download, for example
+`apt install rclone` on VastAI or `brew install rclone` on macOS.
 
 ## Run
 

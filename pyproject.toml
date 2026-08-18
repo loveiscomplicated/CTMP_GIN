@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctmp-gin"
+version = "0.1.0"
+description = "Retrospective CTMP-GIN experiments for TEDS-D discharge classification"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.0",
+  "PyYAML>=6.0",
+  "tqdm>=4.66",
+  "requests>=2.31",
+  "python-dotenv>=1.0",
+  "scikit-learn>=1.4",
+  "scipy>=1.11",
+  "matplotlib>=3.8",
+  "torch>=2.8,<2.9",
+  "torchvision>=0.23,<0.24",
+  "torch-geometric>=2.7,<2.8",
+  "optuna>=4.0",
+  "SQLAlchemy>=2.0",
+  "psycopg2-binary>=2.9",
+  "gdown>=5.0",
+  "xgboost>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+explain = [
+  "captum>=0.7",
+  "ruptures>=1.1",
+  "seaborn>=0.13",
+  "wandb>=0.17",
+]
+pyg-kernels = [
+  "pyg-lib>=0.4",
+  "torch-scatter>=2.1.2",
+  "torch-sparse>=0.6.18",
+  "torch-cluster>=1.6.3",
+  "torch-spline-conv>=1.2.2",
+]
+
+[project.scripts]
+ctmp-main = "src.main:main"
+ctmp-runpod = "src.main_runpod:main"
+ctmp-protocol = "src.protocol.runner:main"
+ctmp-profile-training = "scripts.profile_training:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "scripts*"]
+namespaces = true
