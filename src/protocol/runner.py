@@ -154,6 +154,87 @@ def _worker_id() -> str:
     return _safe_filename("_".join(parts))
 
 
+def _study_trial_count(study: optuna.Study) -> int:
+    return len(study.get_trials(deepcopy=False))
+
+
+def _discord_trial_callback(
+    *,
+    enabled: bool,
+    bot_name: str,
+    max_total_trials: int | None,
+):
+    if not enabled:
+        return None
+
+    def callback(study: optuna.Study, trial: optuna.Trial) -> None:
+        from src.utils.send_message import send_discord_message
+
+        completed = sum(
+            item.state == optuna.trial.TrialState.COMPLETE
+            for item in study.get_trials(deepcopy=False)
+        )
+        target = str(max_total_trials) if max_total_trials is not None else "unknown"
+        value = "pruned" if trial.value is None else f"{float(trial.value):.6f}"
+        message = (
+            f"[HPO_TRIAL_DONE] study={study.study_name} trial={trial.number} "
+            f"state={trial.state.name} value={value} completed={completed}/{target} "
+            f"gpu={os.environ.get('CUDA_VISIBLE_DEVICES', 'all')}"
+        )
+        if not send_discord_message(message, bot_name=bot_name):
+            raise RuntimeError("Discord notification failed for HPO trial")
+
+    return callback
+
+
+def _budget_callback(max_total_trials: int | None):
+    if max_total_trials is None:
+        return None
+
+    def callback(study: optuna.Study, trial: optuna.Trial) -> None:
+        if _study_trial_count(study) >= int(max_total_trials):
+            study.stop()
+
+    return callback
+
+
+def _optimize_study(
+    study: optuna.Study,
+    objective,
+    *,
+    n_trials: int,
+    max_total_trials: int | None = None,
+    notify_trials: bool = False,
+    discord_bot_name: str = "protocol_runner",
+) -> None:
+    if n_trials <= 0:
+        return
+    effective_trials = int(n_trials)
+    callbacks = [
+        callback
+        for callback in (
+            _budget_callback(max_total_trials),
+            _discord_trial_callback(
+                enabled=notify_trials,
+                bot_name=discord_bot_name,
+                max_total_trials=max_total_trials,
+            ),
+        )
+        if callback is not None
+    ]
+    if max_total_trials is not None:
+        remaining = int(max_total_trials) - _study_trial_count(study)
+        if remaining <= 0:
+            return
+        effective_trials = min(effective_trials, remaining)
+    study.optimize(
+        objective,
+        n_trials=effective_trials,
+        callbacks=callbacks,
+        gc_after_trial=True,
+    )
+
+
 def _resolve_codebook_path(cfg: dict[str, Any]) -> str | None:
     return cfg.get("codebook_path") or (cfg.get("data") or {}).get("codebook_path")
 
@@ -284,15 +365,36 @@ def _parse_eval_seeds(value: str | None) -> tuple[int, ...] | None:
     return seeds
 
 
-def _select_eval_splits(eval_artifact: dict[str, Any], eval_seeds: tuple[int, ...] | None = None) -> list[dict[str, Any]]:
+def _parse_eval_split_ids(values: list[str] | None) -> tuple[str, ...] | None:
+    if not values:
+        return None
+    split_ids = []
+    for value in values:
+        split_ids.extend(part.strip() for part in value.split(",") if part.strip())
+    return tuple(split_ids) if split_ids else None
+
+
+def _select_eval_splits(
+    eval_artifact: dict[str, Any],
+    eval_seeds: tuple[int, ...] | None = None,
+    eval_split_ids: tuple[str, ...] | None = None,
+) -> list[dict[str, Any]]:
     splits = list(eval_artifact.get("splits", []))
-    if eval_seeds is None:
+    if eval_seeds is None and eval_split_ids is None:
         return splits
-    available = {int(split["eval_seed"]) for split in splits}
-    missing = sorted(set(eval_seeds) - available)
-    if missing:
-        raise ValueError(f"requested eval seeds not present in split artifact: {missing}")
-    selected = [split for split in splits if int(split["eval_seed"]) in set(eval_seeds)]
+    selected = splits
+    if eval_seeds is not None:
+        available = {int(split["eval_seed"]) for split in splits}
+        missing = sorted(set(eval_seeds) - available)
+        if missing:
+            raise ValueError(f"requested eval seeds not present in split artifact: {missing}")
+        selected = [split for split in selected if int(split["eval_seed"]) in set(eval_seeds)]
+    if eval_split_ids is not None:
+        available_ids = {str(split["split_id"]) for split in splits}
+        missing_ids = sorted(set(eval_split_ids) - available_ids)
+        if missing_ids:
+            raise ValueError(f"requested eval split_ids not present in split artifact: {missing_ids}")
+        selected = [split for split in selected if str(split["split_id"]) in set(eval_split_ids)]
     if not selected:
         raise ValueError("no evaluation splits selected")
     return selected
@@ -394,6 +496,9 @@ def run_hpo(
     allow_sqlite_storage: bool = False,
     study_prefix: str | None = None,
     variant: str = "full",
+    max_total_trials: int | None = None,
+    notify_trials: bool = False,
+    discord_bot_name: str = "protocol_runner",
 ):
     if optuna is None:
         raise RuntimeError("Optuna is required for the hpo stage; install requirements.txt")
@@ -427,7 +532,19 @@ def run_hpo(
             scores.append(score)
         return float(np.mean(scores))
 
-    study.optimize(objective, n_trials=n_trials, gc_after_trial=True)
+    _optimize_study(
+        study,
+        objective,
+        n_trials=n_trials,
+        max_total_trials=max_total_trials,
+        notify_trials=notify_trials,
+        discord_bot_name=discord_bot_name,
+    )
+    completed_trials = [
+        trial for trial in study.trials
+        if trial.state == optuna.trial.TrialState.COMPLETE
+    ]
+    best_trial = study.best_trial if completed_trials else None
     summary = {
         "study_name": study.study_name,
         "requested_study_name": requested_study_name,
@@ -437,10 +554,11 @@ def run_hpo(
         "storage_backend": _storage_backend(storage),
         "storage": _redact_storage(storage),
         "n_trials": len(study.trials),
+        "max_total_trials": max_total_trials,
         "completed": sum(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials),
         "pruned": sum(t.state == optuna.trial.TrialState.PRUNED for t in study.trials),
-        "best_trial": study.best_trial.number if study.best_trial else None,
-        "best_params": study.best_params if study.best_trial else {},
+        "best_trial": best_trial.number if best_trial else None,
+        "best_params": study.best_params if best_trial else {},
         "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
     }
     _write(run_path / "hpo_summary.json", summary)
@@ -508,6 +626,9 @@ def run_graph_pilot(
     storage: str | None = None,
     allow_sqlite_storage: bool = False,
     study_prefix: str | None = None,
+    max_total_trials: int | None = None,
+    notify_trials: bool = False,
+    discord_bot_name: str = "protocol_runner",
 ) -> dict[str, Any]:
     if optuna is None:
         raise RuntimeError("Optuna is required for the edge-pilot stage; install requirements.txt")
@@ -564,7 +685,20 @@ def run_graph_pilot(
             trial.set_user_attr("hub_concentration", float(np.mean(concentrations)))
             return float(np.mean(scores))
 
-        study.optimize(objective, n_trials=n_trials, gc_after_trial=True)
+        _optimize_study(
+            study,
+            objective,
+            n_trials=n_trials,
+            max_total_trials=max_total_trials,
+            notify_trials=notify_trials,
+            discord_bot_name=discord_bot_name,
+        )
+        completed_trials = [
+            trial for trial in study.trials
+            if trial.state == optuna.trial.TrialState.COMPLETE
+        ]
+        if not completed_trials:
+            raise RuntimeError(f"edge-pilot study {study.study_name} has no completed trials")
         best = study.best_trial
         pilot_results.append({
             "study_name": study_name,
@@ -572,6 +706,7 @@ def run_graph_pilot(
             "study_prefix": resolved_study_prefix,
             "score_method": score_method,
             "storage_backend": _storage_backend(resolved_storage),
+            "max_total_trials": max_total_trials,
             "value": best.value,
             "params": best.params,
             "hub_concentration": best.user_attrs.get("hub_concentration", 0.0),
@@ -608,7 +743,9 @@ def run_evaluation(
     selected_config_path: str,
     *,
     eval_seeds: tuple[int, ...] | None = None,
+    eval_split_ids: tuple[str, ...] | None = None,
     variant: str = "full",
+    write_summary: bool = True,
 ):
     run_path, eval_artifact, _ = _require_artifacts(run_dir)
     graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
@@ -616,7 +753,7 @@ def run_evaluation(
     _validate_selected_config_for_variant(selected, cfg, variant, selected_config_path)
     selected_cfg = apply_trial_params(cfg, selected["params"], graph_config)
     results = []
-    splits = _select_eval_splits(eval_artifact, eval_seeds)
+    splits = _select_eval_splits(eval_artifact, eval_seeds, eval_split_ids)
 
     for split in splits:
         train_idx, val_idx, test_idx = _fold_indices(split, test=True)
@@ -634,20 +771,56 @@ def run_evaluation(
         )
         results.append({"split_id": split["split_id"], "result": output})
         _write(run_path / "evaluation" / f"{split['split_id']}.json", results[-1])
-    _write(run_path / "evaluation_summary.json", {
+    if write_summary:
+        _write(run_path / "evaluation_summary.json", {
+            "count": len(results),
+            "variant": variant,
+            "model_name": cfg["model"]["name"],
+            "eval_seeds": sorted({int(split["eval_seed"]) for split in splits}),
+            "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
+            "results": results,
+        })
+    return results
+
+
+def finalize_evaluation(
+    cfg: dict[str, Any],
+    run_dir: str,
+    graph_config_path: str,
+    *,
+    eval_seeds: tuple[int, ...] | None = None,
+    eval_split_ids: tuple[str, ...] | None = None,
+    variant: str = "full",
+) -> dict[str, Any]:
+    run_path, eval_artifact, _ = _require_artifacts(run_dir)
+    graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
+    splits = _select_eval_splits(eval_artifact, eval_seeds, eval_split_ids)
+    results = []
+    missing = []
+    for split in splits:
+        split_id = str(split["split_id"])
+        path = run_path / "evaluation" / f"{split_id}.json"
+        if not path.exists():
+            missing.append(split_id)
+            continue
+        results.append(load_json(path))
+    if missing:
+        raise FileNotFoundError(f"missing evaluation split outputs: {missing}")
+    summary = {
         "count": len(results),
         "variant": variant,
         "model_name": cfg["model"]["name"],
         "eval_seeds": sorted({int(split["eval_seed"]) for split in splits}),
         "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
         "results": results,
-    })
-    return results
+    }
+    _write(run_path / "evaluation_summary.json", summary)
+    return summary
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="CTMP-GIN reproducible protocol runner")
-    parser.add_argument("--stage", required=True, choices=["preflight", "prepare", "edge-pilot", "hpo", "top5-reeval", "evaluate", "ablation-hpo", "ablation-evaluate", "pair-results", "analyze"])
+    parser.add_argument("--stage", required=True, choices=["preflight", "prepare", "edge-pilot", "hpo", "top5-reeval", "evaluate", "finalize-evaluate", "ablation-hpo", "ablation-evaluate", "pair-results", "analyze"])
     parser.add_argument("--config", default=None)
     parser.add_argument("--root", default=None)
     parser.add_argument("--run-dir", required=True)
@@ -664,7 +837,12 @@ def main() -> None:
     parser.add_argument("--variant", default="full")
     parser.add_argument("--warm-start", default=None)
     parser.add_argument("--eval-seeds", default=None, help="Comma-separated eval seeds to run, e.g. '1,2'. Defaults to all artifact seeds.")
+    parser.add_argument("--eval-split-id", action="append", default=[], help="Evaluation split_id(s) to run/finalize. Can be repeated or comma-separated.")
+    parser.add_argument("--no-summary", action="store_true", help="For evaluate stages, write split files only and skip evaluation_summary.json.")
     parser.add_argument("--study-prefix", default=None, help="Namespace Optuna study names. Defaults to a stable hash of --run-dir.")
+    parser.add_argument("--max-total-trials", type=int, default=None, help="Shared Optuna trial budget for multi-worker HPO.")
+    parser.add_argument("--notify-trials", action="store_true", help="Send a Discord message after each HPO/edge-pilot trial.")
+    parser.add_argument("--discord-bot-name", default="protocol_runner")
     parser.add_argument(
         "--storage",
         default=None,
@@ -676,9 +854,11 @@ def main() -> None:
         help="Explicitly allow local SQLite Optuna storage for single-process smoke runs.",
     )
     args = parser.parse_args()
-    if args.stage in DATA_STAGES:
-        if not args.config or not args.root:
-            raise SystemExit("--config and --root are required for data/model protocol stages")
+    if args.stage in DATA_STAGES or args.stage == "finalize-evaluate":
+        if not args.config:
+            raise SystemExit("--config is required for data/model protocol stages")
+        if args.stage in DATA_STAGES and not args.root:
+            raise SystemExit("--root is required for data/model protocol stages")
         cfg = _load_cfg(args.config)
         if args.codebook:
             if not Path(args.codebook).exists():
@@ -687,12 +867,14 @@ def main() -> None:
     else:
         cfg = {}
     if args.stage == "preflight":
-        _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
-        _, labels = _dataset(cfg, args.root)
+        preflight_cfg = _variant_cfg(cfg, args.variant) if args.variant != "full" else cfg
+        _ensure_protocol_codebook(preflight_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
+        _, labels = _dataset(preflight_cfg, args.root)
         run_preflight(args.run_dir, labels, require_graph=Path(args.run_dir, "graph_config.json").exists())
     elif args.stage == "prepare":
-        _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
-        prepare_artifacts(cfg, args.root, args.run_dir)
+        prepare_cfg = _variant_cfg(cfg, args.variant) if args.variant != "full" else cfg
+        _ensure_protocol_codebook(prepare_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
+        prepare_artifacts(prepare_cfg, args.root, args.run_dir)
     elif args.stage == "edge-pilot":
         _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
         run_graph_pilot(
@@ -703,6 +885,9 @@ def main() -> None:
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
             study_prefix=args.study_prefix,
+            max_total_trials=args.max_total_trials,
+            notify_trials=args.notify_trials,
+            discord_bot_name=args.discord_bot_name,
         )
     elif args.stage == "hpo":
         if not args.graph_config:
@@ -718,6 +903,9 @@ def main() -> None:
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
             study_prefix=args.study_prefix,
+            max_total_trials=args.max_total_trials,
+            notify_trials=args.notify_trials,
+            discord_bot_name=args.discord_bot_name,
         )
     elif args.stage == "ablation-hpo":
         if not args.graph_config or not args.variant or args.variant == "full":
@@ -741,6 +929,9 @@ def main() -> None:
             allow_sqlite_storage=args.allow_sqlite_storage,
             study_prefix=args.study_prefix,
             variant=args.variant,
+            max_total_trials=args.max_total_trials,
+            notify_trials=args.notify_trials,
+            discord_bot_name=args.discord_bot_name,
         )
     elif args.stage == "top5-reeval":
         if not args.graph_config:
@@ -769,7 +960,21 @@ def main() -> None:
             args.graph_config,
             args.selected_config,
             eval_seeds=_parse_eval_seeds(args.eval_seeds),
+            eval_split_ids=_parse_eval_split_ids(args.eval_split_id),
             variant="full",
+            write_summary=not args.no_summary,
+        )
+    elif args.stage == "finalize-evaluate":
+        if not args.graph_config:
+            raise SystemExit("--graph-config is required for finalize-evaluate")
+        variant_cfg = _variant_cfg(cfg, args.variant)
+        finalize_evaluation(
+            variant_cfg,
+            args.run_dir,
+            args.graph_config,
+            eval_seeds=_parse_eval_seeds(args.eval_seeds),
+            eval_split_ids=_parse_eval_split_ids(args.eval_split_id),
+            variant=args.variant,
         )
     elif args.stage == "ablation-evaluate":
         if not args.graph_config or not args.selected_config or not args.variant or args.variant == "full":
@@ -783,7 +988,9 @@ def main() -> None:
             args.graph_config,
             args.selected_config,
             eval_seeds=_parse_eval_seeds(args.eval_seeds),
+            eval_split_ids=_parse_eval_split_ids(args.eval_split_id),
             variant=args.variant,
+            write_summary=not args.no_summary,
         )
     elif args.stage == "pair-results":
         if not args.comparison:

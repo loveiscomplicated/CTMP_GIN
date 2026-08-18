@@ -14,7 +14,10 @@ from src.protocol.graph_config import load_graph_config, write_graph_config
 from src.protocol.hpo import apply_trial_params, suggest_protocol_params
 from src.protocol.mi import compute_mi_dict, mi_cache_path
 from src.protocol.runner import (
+    finalize_evaluation,
     _namespaced_study_name,
+    _optimize_study,
+    _parse_eval_split_ids,
     _parse_eval_seeds,
     _redact_storage,
     _ensure_protocol_codebook,
@@ -265,6 +268,68 @@ def test_eval_seed_filter_selects_two_seed_ablation_plan(tmp_path):
     assert {split["eval_seed"] for split in selected} == {1, 2}
     with pytest.raises(ValueError, match="requested eval seeds"):
         _select_eval_splits(artifact, (999,))
+
+
+def test_eval_split_id_filter_selects_exact_splits(tmp_path):
+    artifact = create_eval_artifact(np.array([0, 1] * 100), tmp_path / "eval.json")
+    split_ids = [artifact["splits"][0]["split_id"], artifact["splits"][3]["split_id"]]
+    selected = _select_eval_splits(
+        artifact,
+        eval_split_ids=_parse_eval_split_ids([",".join(split_ids)]),
+    )
+    assert [split["split_id"] for split in selected] == split_ids
+    with pytest.raises(ValueError, match="requested eval split_ids"):
+        _select_eval_splits(artifact, eval_split_ids=("missing_split",))
+
+
+def test_optimize_study_respects_shared_trial_budget():
+    optuna = pytest.importorskip("optuna")
+    study = optuna.create_study(direction="maximize")
+
+    def objective(trial):
+        return float(trial.number)
+
+    _optimize_study(study, objective, n_trials=5, max_total_trials=2)
+    assert len(study.trials) == 2
+    _optimize_study(study, objective, n_trials=5, max_total_trials=2)
+    assert len(study.trials) == 2
+
+
+def test_finalize_evaluation_writes_summary_and_rejects_missing_splits(tmp_path):
+    labels = np.array([0, 1] * 100)
+    run_dir = tmp_path / "run"
+    eval_artifact = create_eval_artifact(labels, run_dir / "d_eval_split_artifact.json")
+    hpo_idx = np.asarray(eval_artifact["d_hpo_idx"])
+    create_hpo_artifact(labels[hpo_idx], run_dir / "d_hpo_split_artifact.json", base_indices=hpo_idx)
+    graph = write_graph_config(
+        str(tmp_path / "graph_config.json"),
+        {"score_method": "raw_mi", "threshold": 0.01, "top_k": 6, "pruning_ratio": 0.3},
+        {"artifact_fingerprint": "pilot123"},
+        model_name="ctmp_gin",
+    )
+    split_ids = [split["split_id"] for split in eval_artifact["splits"][:2]]
+    (run_dir / "evaluation").mkdir(parents=True)
+    for index, split_id in enumerate(split_ids):
+        (run_dir / "evaluation" / f"{split_id}.json").write_text(
+            json.dumps({"split_id": split_id, "result": {"test_auc": 0.8 + index * 0.01}}),
+            encoding="utf-8",
+        )
+
+    summary = finalize_evaluation(
+        {"model": {"name": "ctmp_gin"}},
+        str(run_dir),
+        str(tmp_path / "graph_config.json"),
+        eval_split_ids=tuple(split_ids),
+    )
+    assert summary["count"] == 2
+    assert summary["graph_config_fingerprint"] == graph["graph_config_fingerprint"]
+    assert json.loads((run_dir / "evaluation_summary.json").read_text(encoding="utf-8"))["count"] == 2
+    with pytest.raises(FileNotFoundError, match="missing evaluation split outputs"):
+        finalize_evaluation(
+            {"model": {"name": "ctmp_gin"}},
+            str(run_dir),
+            str(tmp_path / "graph_config.json"),
+        )
 
 
 def test_analysis_requires_sesoi_for_f4(tmp_path):

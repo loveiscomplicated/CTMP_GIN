@@ -51,6 +51,7 @@ ctmp-main = "src.main:main"
 ctmp-runpod = "src.main_runpod:main"
 ctmp-protocol = "src.protocol.runner:main"
 ctmp-profile-training = "scripts.profile_training:main"
+ctmp-protocol-multigpu = "scripts.protocol_multigpu_pipeline:main"
 
 [tool.setuptools]
 include-package-data = true

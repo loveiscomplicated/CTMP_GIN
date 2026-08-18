@@ -94,6 +94,27 @@ XGBoost:
 python src/main.py --config configs/xgboost.yaml
 ```
 
+Protocol multi-GPU pipeline, excluding XGBoost:
+
+```bash
+export PROTOCOL_OPTUNA_STORAGE='postgresql+psycopg2://USER:PASSWORD@HOST:5432/DB'
+export DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'
+python scripts/protocol_multigpu_pipeline.py \
+  --run-dir new_runs/full_neural_ablation \
+  --root src/data \
+  --gpus auto \
+  --dry-run
+
+python scripts/protocol_multigpu_pipeline.py \
+  --run-dir new_runs/full_neural_ablation \
+  --root src/data \
+  --gpus auto
+```
+
+Each training subprocess sees only one GPU through `CUDA_VISIBLE_DEVICES`.
+The launcher uses all listed GPUs by scheduling independent HPO/evaluation
+jobs across them. Discord and PostgreSQL Optuna storage are required.
+
 ## CLI Overrides
 
 ```bash
