@@ -7,9 +7,13 @@ CUDA_TAG="${CUDA_TAG:-auto}"
 INSTALL_PYG_KERNELS="${INSTALL_PYG_KERNELS:-1}"
 TORCH_SPEC="${TORCH_SPEC:-torch>=2.8,<2.9}"
 TORCHVISION_SPEC="${TORCHVISION_SPEC:-torchvision>=0.23,<0.24}"
+DOWNLOAD_TEDS_DATA="${DOWNLOAD_TEDS_DATA:-1}"
+TEDS_GDOWN_FILE_ID="${TEDS_GDOWN_FILE_ID:-1T1oYAsdYDcdqUckd7CBzBWj9RnwGrEZg}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TEDS_DATA_DIR="${TEDS_DATA_DIR:-${REPO_ROOT}/src/data/raw}"
+TEDS_DATA_PATH="${TEDS_DATA_PATH:-${TEDS_DATA_DIR}/TEDS_Discharge.csv}"
 
 declare -a PIP_INSTALL_FLAGS=()
 
@@ -42,6 +46,28 @@ PY
 
 pip_install() {
   "$PYTHON_BIN" -m pip install "${PIP_INSTALL_FLAGS[@]}" "$@"
+}
+
+download_teds_data() {
+  if [[ "$DOWNLOAD_TEDS_DATA" != "1" ]]; then
+    echo "[$(ts)] skipping TEDS raw data download (DOWNLOAD_TEDS_DATA=${DOWNLOAD_TEDS_DATA})"
+    return 0
+  fi
+
+  if [[ -s "$TEDS_DATA_PATH" ]]; then
+    echo "[$(ts)] TEDS raw data already exists: ${TEDS_DATA_PATH}"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$TEDS_DATA_PATH")"
+  echo "[$(ts)] downloading TEDS raw data -> ${TEDS_DATA_PATH}"
+  "$PYTHON_BIN" -m gdown "https://drive.google.com/uc?id=${TEDS_GDOWN_FILE_ID}" -O "$TEDS_DATA_PATH"
+
+  if [[ ! -s "$TEDS_DATA_PATH" ]]; then
+    echo "[$(ts)] ERROR: TEDS raw data download did not create a non-empty file: ${TEDS_DATA_PATH}" >&2
+    return 1
+  fi
+  echo "[$(ts)] TEDS raw data ready: ${TEDS_DATA_PATH}"
 }
 
 detect_cuda_tag() {
@@ -153,5 +179,6 @@ install_pyg "$ACCEL_TAG"
 echo "[$(ts)] installing project: ${PROJECT_SPEC}"
 pip_install "$PROJECT_SPEC"
 
+download_teds_data
 verify_install
 echo "[$(ts)] pip environment setup complete"

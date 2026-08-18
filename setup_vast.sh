@@ -86,14 +86,18 @@ git pull origin "$BRANCH"
 # Python deps (pip, no conda)
 # -----------------------
 cd "$REPO_DIR"
-PYTHON_BIN="$PYTHON_BIN" PROJECT_SPEC="$PROJECT_SPEC" bash scripts/install_pip.sh
+PYTHON_BIN="$PYTHON_BIN" PROJECT_SPEC="$PROJECT_SPEC" TEDS_GDOWN_FILE_ID="$GDOWN_FILE_ID" DOWNLOAD_TEDS_DATA=1 bash scripts/install_pip.sh
 
 echo "[$(ts)] Environment setup complete with pip."
 # -----------------------
 # Data download
 # -----------------------
 mkdir -p "$DATA_DIR"
-cd "$DATA_DIR"
-"$PYTHON_BIN" -m gdown "$GDOWN_FILE_ID"
+if [[ -s "${DATA_DIR}/TEDS_Discharge.csv" ]]; then
+  echo "[$(ts)] Data ready: ${DATA_DIR}/TEDS_Discharge.csv"
+else
+  cd "$DATA_DIR"
+  "$PYTHON_BIN" -m gdown "https://drive.google.com/uc?id=${GDOWN_FILE_ID}" -O TEDS_Discharge.csv
+fi
 
 echo "[$(ts)] Setup complete."

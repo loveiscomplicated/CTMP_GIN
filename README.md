@@ -49,11 +49,14 @@ python3 -m pip install -r requirements.txt
 ```
 
 For VastAI/CUDA, use the helper so PyTorch and PyG wheels are installed from
-the matching wheel indexes:
+the matching wheel indexes. It also downloads `src/data/raw/TEDS_Discharge.csv`
+from the project Google Drive file ID when the file is missing:
 
 ```bash
 bash scripts/install_pip.sh
 ```
+
+For dependency-only setup, run `DOWNLOAD_TEDS_DATA=0 bash scripts/install_pip.sh`.
 
 Quick dependency check:
 
