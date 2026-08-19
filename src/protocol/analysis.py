@@ -73,17 +73,15 @@ def _unique_results_by_split_id(results: list[dict[str, Any]], *, context: str) 
     return by_split
 
 
-def _require_matching_graph_config(candidate_summary: dict[str, Any], reference_summary: dict[str, Any]) -> str:
-    candidate_graph = candidate_summary.get("graph_config_fingerprint")
-    reference_graph = reference_summary.get("graph_config_fingerprint")
-    if not candidate_graph or not reference_graph:
-        raise ValueError("evaluation summaries must include graph_config_fingerprint")
-    if candidate_graph != reference_graph:
-        raise ValueError(
-            "candidate/reference graph_config_fingerprint mismatch: "
-            f"{candidate_graph!r} != {reference_graph!r}"
-        )
-    return str(candidate_graph)
+def _graph_fingerprints(candidate_summary: dict[str, Any], reference_summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "candidate_graph_config_fingerprint": candidate_summary.get("graph_config_fingerprint"),
+        "reference_graph_config_fingerprint": reference_summary.get("graph_config_fingerprint"),
+        "same_graph_config": (
+            candidate_summary.get("graph_config_fingerprint") is not None
+            and candidate_summary.get("graph_config_fingerprint") == reference_summary.get("graph_config_fingerprint")
+        ),
+    }
 
 
 def _split_size_summary(
@@ -123,7 +121,7 @@ def build_paired_results(
         spec = _parse_comparison_spec(raw_spec) if isinstance(raw_spec, str) else raw_spec
         candidate_summary = _load_summary(spec["candidate_summary"])
         reference_summary = _load_summary(spec["reference_summary"])
-        graph_config_fingerprint = _require_matching_graph_config(candidate_summary, reference_summary)
+        graph_metadata = _graph_fingerprints(candidate_summary, reference_summary)
         candidate_by_split = _unique_results_by_split_id(
             candidate_summary.get("results", []),
             context=f"{spec.get('candidate')} summary",
@@ -158,7 +156,7 @@ def build_paired_results(
             "candidate": spec["candidate"],
             "reference": spec["reference"],
             "metric": metric,
-            "graph_config_fingerprint": graph_config_fingerprint,
+            **graph_metadata,
             "split_ids": split_ids,
             "split_keys": [
                 {

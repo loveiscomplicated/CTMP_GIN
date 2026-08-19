@@ -22,6 +22,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.protocol.ablations import VARIANTS
 from src.protocol.constants import EVAL_FOLDS, EVAL_SEEDS
+from src.protocol.runner import _namespaced_study_name
+
+try:
+    import optuna
+except ImportError:
+    optuna = None  # type: ignore[assignment]
 
 
 MAIN_MODELS = {
@@ -282,9 +288,6 @@ class ProtocolPipeline:
             for variant in self.ablation_variants()
         ]
 
-    def graph_config_path(self) -> Path:
-        return self.ctmp_context().run_dir / "graph_config.json"
-
     def runner_cmd(
         self,
         stage: str,
@@ -312,14 +315,16 @@ class ProtocolPipeline:
         cmd.extend(str(item) for item in extra)
         return cmd
 
-    def optuna_args(self, total_trials: int, n_trials: int = 1) -> list[str]:
+    def optuna_args(self, target_completed: int, max_attempted: int, n_trials: int = 1) -> list[str]:
         args = [
             "--storage",
             self.storage,
             "--n-trials",
             str(n_trials),
+            "--target-completed-trials",
+            str(target_completed),
             "--max-total-trials",
-            str(total_trials),
+            str(max_attempted),
             "--discord-bot-name",
             self.args.discord_bot_name,
         ]
@@ -501,54 +506,85 @@ class ProtocolPipeline:
             if current != reference:
                 raise SystemExit(f"split artifact mismatch: {ctx.label}")
 
-    def run_edge_pilot(self) -> None:
-        ctx = self.ctmp_context()
-        if self.artifact_done(self.graph_config_path()) and self.artifact_done(ctx.run_dir / "edge_pilot.json"):
-            self.notifier.send("[STAGE_SKIP] edge-pilot already complete")
-            return
-        jobs = [
-            Job(
-                name=f"edge-pilot trial {index + 1}/{self.args.edge_pilot_trials}",
-                cmd=self.runner_cmd(
-                    "edge-pilot",
-                    ctx,
-                    *self.optuna_args(self.args.edge_pilot_trials, n_trials=1),
-                ),
-            )
-            for index in range(self.args.edge_pilot_trials)
-        ]
-        self.run_parallel("edge-pilot", jobs)
-        self.run_command(
-            "edge-pilot finalize",
-            self.runner_cmd(
-                "edge-pilot",
-                ctx,
-                *self.optuna_args(self.args.edge_pilot_trials, n_trials=0),
-            ),
-            gpu=self.gpus[0],
-        )
+    def hpo_status(self, ctx: RunContext) -> dict[str, int]:
+        if optuna is None:
+            raise RuntimeError("Optuna is required for HPO status checks")
+        requested = f"{ctx.config.stem}_{ctx.variant}" if ctx.is_ablation else f"{ctx.key}_protocol"
+        if ctx.is_ablation:
+            requested = f"ctmp_gin_{ctx.variant}"
+        study_name = _namespaced_study_name(ctx.run_dir, requested)
+        try:
+            study = optuna.load_study(study_name=study_name, storage=self.storage)
+        except (KeyError, ValueError):
+            return {"complete": 0, "running": 0, "pruned": 0, "failed": 0, "waiting": 0, "attempted": 0, "total": 0}
+        states = optuna.trial.TrialState
+        trials = study.get_trials(deepcopy=False)
+        counts = {
+            "complete": sum(trial.state == states.COMPLETE for trial in trials),
+            "running": sum(trial.state == states.RUNNING for trial in trials),
+            "pruned": sum(trial.state == states.PRUNED for trial in trials),
+            "failed": sum(trial.state == states.FAIL for trial in trials),
+            "waiting": sum(trial.state == states.WAITING for trial in trials),
+        }
+        counts["attempted"] = counts["complete"] + counts["running"] + counts["pruned"] + counts["failed"]
+        counts["total"] = len(trials)
+        return counts
 
     def hpo_stage(self, contexts: list[RunContext], *, ablation: bool) -> None:
-        total = self.args.ablation_hpo_trials if ablation else self.args.hpo_trials
+        target_completed = self.args.ablation_hpo_trials if ablation else self.args.hpo_trials
+        max_attempted = self.args.ablation_max_hpo_attempts if ablation else self.args.max_hpo_attempts
         pending_contexts = [ctx for ctx in contexts if not self.artifact_done(ctx.selected_config)]
         if not pending_contexts:
             self.notifier.send("[STAGE_SKIP] ablation-HPO/top5 already complete" if ablation else "[STAGE_SKIP] main HPO/top5 already complete")
             return
-        jobs = []
-        for trial_index in range(total):
-            for ctx in pending_contexts:
+        if self.dry_run:
+            jobs = []
+            for index, ctx in enumerate(pending_contexts):
                 stage = "ablation-hpo" if ctx.is_ablation else "hpo"
                 jobs.append(Job(
-                    name=f"{ctx.label} {stage} trial_job {trial_index + 1}/{total}",
+                    name=f"{ctx.label} {stage} trial_job 1/{target_completed}",
                     cmd=self.runner_cmd(
                         stage,
                         ctx,
-                        "--graph-config",
-                        self.graph_config_path(),
-                        *self.optuna_args(total, n_trials=1),
+                        *self.optuna_args(target_completed, max_attempted, n_trials=1),
                     ),
                 ))
-        self.run_parallel("ablation-HPO" if ablation else "main HPO", jobs)
+            self.run_parallel("ablation-HPO" if ablation else "main HPO", jobs)
+        else:
+            while True:
+                jobs = []
+                counts_by_context = {ctx: self.hpo_status(ctx) for ctx in pending_contexts}
+                planned_by_context = {ctx: 0 for ctx in pending_contexts}
+                while len(jobs) < len(self.gpus):
+                    added = False
+                    for ctx in pending_contexts:
+                        counts = counts_by_context[ctx]
+                        planned = planned_by_context[ctx]
+                        if counts["complete"] + counts["running"] + planned >= target_completed:
+                            continue
+                        if counts["attempted"] + planned >= max_attempted:
+                            continue
+                        stage = "ablation-hpo" if ctx.is_ablation else "hpo"
+                        jobs.append(Job(
+                            name=(
+                                f"{ctx.label} {stage} trial_job "
+                                f"{counts['attempted'] + planned + 1}/{max_attempted}"
+                            ),
+                            cmd=self.runner_cmd(
+                                stage,
+                                ctx,
+                                *self.optuna_args(target_completed, max_attempted, n_trials=1),
+                            ),
+                        ))
+                        planned_by_context[ctx] = planned + 1
+                        added = True
+                        if len(jobs) >= len(self.gpus):
+                            break
+                    if not added:
+                        break
+                if not jobs:
+                    break
+                self.run_parallel("ablation-HPO batch" if ablation else "main HPO batch", jobs)
         for ctx in pending_contexts:
             stage = "ablation-hpo" if ctx.is_ablation else "hpo"
             self.run_command(
@@ -556,9 +592,7 @@ class ProtocolPipeline:
                 self.runner_cmd(
                     stage,
                     ctx,
-                    "--graph-config",
-                    self.graph_config_path(),
-                    *self.optuna_args(total, n_trials=0),
+                    *self.optuna_args(target_completed, max_attempted, n_trials=0),
                 ),
                 gpu=self.gpus[0],
             )
@@ -567,8 +601,6 @@ class ProtocolPipeline:
                 self.runner_cmd(
                     "top5-reeval",
                     ctx,
-                    "--graph-config",
-                    self.graph_config_path(),
                     "--storage",
                     self.storage,
                 ),
@@ -598,8 +630,6 @@ class ProtocolPipeline:
                 cmd=self.runner_cmd(
                     stage,
                     ctx,
-                    "--graph-config",
-                    self.graph_config_path(),
                     "--selected-config",
                     selected,
                     "--eval-split-id",
@@ -624,8 +654,6 @@ class ProtocolPipeline:
                 self.runner_cmd(
                     "finalize-evaluate",
                     ctx,
-                    "--graph-config",
-                    self.graph_config_path(),
                     include_root=False,
                 ),
             )
@@ -694,9 +722,10 @@ class ProtocolPipeline:
             "storage_backend": storage_backend(self.storage),
             "main_models": [ctx.key for ctx in main_contexts],
             "ablation_variants": [ctx.variant for ctx in ablation_contexts],
-            "edge_pilot_trials": self.args.edge_pilot_trials,
             "hpo_trials": self.args.hpo_trials,
+            "max_hpo_attempts": self.args.max_hpo_attempts,
             "ablation_hpo_trials": self.args.ablation_hpo_trials,
+            "ablation_max_hpo_attempts": self.args.ablation_max_hpo_attempts,
         }
         if self.dry_run:
             print(json.dumps(payload, indent=2))
@@ -717,7 +746,6 @@ class ProtocolPipeline:
             f"xgboost=excluded"
         )
         self.prepare_and_preflight(all_contexts)
-        self.run_edge_pilot()
         self.hpo_stage(main_contexts, ablation=False)
         self.evaluate_stage(main_contexts, "main evaluate")
         independent_ablations = [ctx for ctx in ablation_contexts if ctx.hpo_required]
@@ -740,9 +768,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--notify-trials", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--discord-bot-name", default="protocol_multigpu")
-    parser.add_argument("--edge-pilot-trials", type=int, default=20)
-    parser.add_argument("--hpo-trials", type=int, default=100)
+    parser.add_argument("--hpo-trials", type=int, default=40)
+    parser.add_argument("--max-hpo-attempts", type=int, default=80)
     parser.add_argument("--ablation-hpo-trials", type=int, default=40)
+    parser.add_argument("--ablation-max-hpo-attempts", type=int, default=80)
     parser.add_argument("--ablation-variants", default=",".join(DEFAULT_ABLATION_VARIANTS))
     parser.add_argument("--sesoi", type=float, default=None)
     parser.add_argument("--poll-seconds", type=float, default=10.0)

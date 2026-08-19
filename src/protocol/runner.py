@@ -28,10 +28,10 @@ from src.trainers.run_single_experiment import run_single_experiment
 from .artifacts import create_eval_artifact, create_hpo_artifact, load_json, validate_artifact
 from .constants import EVAL_SEEDS, HPO_SEED
 from .graph_config import hub_concentration, load_graph_config, write_graph_config
-from .hpo import apply_trial_params, suggest_protocol_params
+from .hpo import apply_trial_params, normalize_graph_params, selected_config_fingerprint, suggest_protocol_params
 from .preflight import run_preflight
 from .analysis import analyze_paired_results, build_paired_results
-from .ablations import VARIANTS, apply_variant
+from .ablations import VARIANTS, apply_variant, validate_ablation_mutation
 from .vocabulary import write_codebook_from_csv, write_codebook_from_frame
 
 
@@ -73,6 +73,13 @@ def _write(path: Path, payload: Any) -> None:
         tmp_path = Path(handle.name)
         handle.write(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     tmp_path.replace(path)
+
+
+def _config_fingerprint(payload: dict[str, Any]) -> str:
+    return hashlib.blake2b(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8"),
+        digest_size=12,
+    ).hexdigest()
 
 
 def _load_cfg(path: str) -> dict[str, Any]:
@@ -127,6 +134,26 @@ def _resolve_optuna_storage(
     return resolved
 
 
+def _optuna_storage_handle(
+    storage: str,
+    *,
+    heartbeat_interval: int | None = None,
+    heartbeat_grace_period: int | None = None,
+):
+    if (
+        optuna is not None
+        and heartbeat_interval is not None
+        and int(heartbeat_interval) > 0
+        and _storage_backend(storage) in {"postgres", "postgresql"}
+    ):
+        return optuna.storages.RDBStorage(
+            url=storage,
+            heartbeat_interval=int(heartbeat_interval),
+            grace_period=heartbeat_grace_period,
+        )
+    return storage
+
+
 def _safe_filename(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "unnamed"
 
@@ -158,6 +185,21 @@ def _study_trial_count(study: optuna.Study) -> int:
     return len(study.get_trials(deepcopy=False))
 
 
+def _trial_state_counts(study: optuna.Study) -> dict[str, int]:
+    states = optuna.trial.TrialState
+    trials = study.get_trials(deepcopy=False)
+    counts = {
+        "complete": sum(trial.state == states.COMPLETE for trial in trials),
+        "running": sum(trial.state == states.RUNNING for trial in trials),
+        "pruned": sum(trial.state == states.PRUNED for trial in trials),
+        "failed": sum(trial.state == states.FAIL for trial in trials),
+        "waiting": sum(trial.state == states.WAITING for trial in trials),
+    }
+    counts["attempted"] = counts["complete"] + counts["running"] + counts["pruned"] + counts["failed"]
+    counts["total"] = len(trials)
+    return counts
+
+
 def _discord_trial_callback(
     *,
     enabled: bool,
@@ -187,12 +229,15 @@ def _discord_trial_callback(
     return callback
 
 
-def _budget_callback(max_total_trials: int | None):
-    if max_total_trials is None:
+def _budget_callback(target_completed_trials: int | None, max_total_trials: int | None):
+    if target_completed_trials is None and max_total_trials is None:
         return None
 
     def callback(study: optuna.Study, trial: optuna.Trial) -> None:
-        if _study_trial_count(study) >= int(max_total_trials):
+        counts = _trial_state_counts(study)
+        if target_completed_trials is not None and counts["complete"] >= int(target_completed_trials):
+            study.stop()
+        if max_total_trials is not None and counts["attempted"] >= int(max_total_trials):
             study.stop()
 
     return callback
@@ -203,30 +248,37 @@ def _optimize_study(
     objective,
     *,
     n_trials: int,
+    target_completed_trials: int | None = None,
     max_total_trials: int | None = None,
     notify_trials: bool = False,
     discord_bot_name: str = "protocol_runner",
 ) -> None:
     if n_trials <= 0:
         return
-    effective_trials = int(n_trials)
     callbacks = [
         callback
         for callback in (
-            _budget_callback(max_total_trials),
+            _budget_callback(target_completed_trials, max_total_trials),
             _discord_trial_callback(
                 enabled=notify_trials,
                 bot_name=discord_bot_name,
-                max_total_trials=max_total_trials,
+                max_total_trials=target_completed_trials or max_total_trials,
             ),
         )
         if callback is not None
     ]
-    if max_total_trials is not None:
-        remaining = int(max_total_trials) - _study_trial_count(study)
-        if remaining <= 0:
+    counts = _trial_state_counts(study)
+    effective_trials = int(n_trials)
+    if target_completed_trials is not None:
+        remaining_completed_slots = int(target_completed_trials) - counts["complete"] - counts["running"]
+        if remaining_completed_slots <= 0:
             return
-        effective_trials = min(effective_trials, remaining)
+        effective_trials = min(effective_trials, remaining_completed_slots)
+    if max_total_trials is not None:
+        remaining_attempts = int(max_total_trials) - counts["attempted"]
+        if remaining_attempts <= 0:
+            return
+        effective_trials = min(effective_trials, remaining_attempts)
     study.optimize(
         objective,
         n_trials=effective_trials,
@@ -354,6 +406,71 @@ def _validate_selected_config_for_variant(
             f"{selected_config_path} has variant {selected_variant!r}, "
             f"which cannot be used for evaluating {variant!r}"
         )
+
+
+def _load_warm_start_params(path: str | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    payload = load_json(path)
+    selected = payload.get("selected", payload)
+    graph = {
+        **selected.get("params", {}),
+        **selected.get("graph_params", {}),
+    }
+    if "score_method" not in graph and "score_method" in selected:
+        graph["score_method"] = selected["score_method"]
+    score_method = str(graph.get("score_method", "raw_mi"))
+    params = {
+        "score_method": score_method,
+        "top_k": int(graph["top_k"]),
+        "pruning_ratio": float(graph["pruning_ratio"]),
+    }
+    threshold_key = "threshold_raw_mi" if score_method == "raw_mi" else "threshold_nmi"
+    if "threshold" in graph:
+        params[threshold_key] = float(graph["threshold"])
+    elif threshold_key in graph:
+        params[threshold_key] = float(graph[threshold_key])
+    return params
+
+
+def _apply_selected_config(cfg: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
+    params = selected.get("params", {})
+    graph_params = selected.get("graph_params")
+    return apply_trial_params(cfg, params, graph_params)
+
+
+def _evaluation_metadata(
+    *,
+    cfg: dict[str, Any],
+    selected: dict[str, Any],
+    selected_cfg: dict[str, Any],
+    variant: str,
+    ablation_mutation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    graph_params = selected.get("graph_params")
+    if graph_params is None and selected.get("params"):
+        graph_params = normalize_graph_params(selected["params"])
+    graph_fingerprint = _config_fingerprint(graph_params or {})
+    selected_fingerprint = selected.get("config_fingerprint") or _config_fingerprint({
+        "model_name": cfg.get("model", {}).get("name"),
+        "variant": selected.get("variant", "full"),
+        "params": selected.get("params", {}),
+        "graph_params": graph_params,
+    })
+    effective_fingerprint = _config_fingerprint(selected_cfg)
+    metadata = {
+        "variant": variant,
+        "model_name": cfg["model"]["name"],
+        "selected_config_fingerprint": selected_fingerprint,
+        "effective_config_fingerprint": effective_fingerprint,
+        "config_fingerprint": effective_fingerprint,
+        "graph_config_fingerprint": graph_fingerprint,
+        "graph_params": graph_params or {},
+    }
+    if variant != "full":
+        metadata["parent_config_fingerprint"] = selected_fingerprint
+        metadata["ablation_mutation"] = ablation_mutation
+    return metadata
 
 
 def _parse_eval_seeds(value: str | None) -> tuple[int, ...] | None:
@@ -488,7 +605,6 @@ def run_hpo(
     cfg: dict[str, Any],
     root: str,
     run_dir: str,
-    graph_config_path: str,
     n_trials: int = 100,
     study_name: str | None = None,
     warm_start_params: dict[str, Any] | None = None,
@@ -496,22 +612,29 @@ def run_hpo(
     allow_sqlite_storage: bool = False,
     study_prefix: str | None = None,
     variant: str = "full",
+    target_completed_trials: int | None = None,
     max_total_trials: int | None = None,
     notify_trials: bool = False,
     discord_bot_name: str = "protocol_runner",
+    heartbeat_interval: int | None = None,
+    heartbeat_grace_period: int | None = None,
 ):
     if optuna is None:
         raise RuntimeError("Optuna is required for the hpo stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
-    graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
-    storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
+    storage_url = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
+    storage_handle = _optuna_storage_handle(
+        storage_url,
+        heartbeat_interval=heartbeat_interval,
+        heartbeat_grace_period=heartbeat_grace_period,
+    )
     requested_study_name = study_name or f"{cfg['model']['name']}_protocol"
     study_name = _namespaced_study_name(run_path, requested_study_name, study_prefix)
     sampler = optuna.samplers.TPESampler(seed=HPO_SEED, multivariate=True, group=True, n_startup_trials=20, constant_liar=True)
     pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5, interval_steps=1)
     study = optuna.create_study(
         study_name=study_name,
-        storage=storage,
+        storage=storage_handle,
         direction="maximize",
         sampler=sampler,
         pruner=pruner,
@@ -519,11 +642,11 @@ def run_hpo(
     )
     if warm_start_params and not study.trials:
         study.enqueue_trial(warm_start_params)
-    folds = hpo_artifact["subset_folds"]
+    folds = hpo_artifact["subset_folds"][:1]
 
     def objective(trial: optuna.Trial):
         trial_cfg = suggest_protocol_params(trial, cfg)
-        trial_cfg = apply_trial_params(trial_cfg, trial.params, graph_config)
+        trial_cfg = apply_trial_params(trial_cfg, trial.params)
         scores = []
         for fold_info in folds:
             score = _score_config(trial_cfg, root, fold_info, trial.number, trial=trial)
@@ -536,6 +659,7 @@ def run_hpo(
         study,
         objective,
         n_trials=n_trials,
+        target_completed_trials=target_completed_trials,
         max_total_trials=max_total_trials,
         notify_trials=notify_trials,
         discord_bot_name=discord_bot_name,
@@ -545,21 +669,28 @@ def run_hpo(
         if trial.state == optuna.trial.TrialState.COMPLETE
     ]
     best_trial = study.best_trial if completed_trials else None
+    counts = _trial_state_counts(study)
     summary = {
         "study_name": study.study_name,
         "requested_study_name": requested_study_name,
         "study_prefix": _resolve_study_prefix(run_path, study_prefix),
         "variant": variant,
         "worker_id": _worker_id(),
-        "storage_backend": _storage_backend(storage),
-        "storage": _redact_storage(storage),
-        "n_trials": len(study.trials),
+        "storage_backend": _storage_backend(storage_url),
+        "storage": _redact_storage(storage_url),
+        "n_trials": counts["total"],
+        "target_completed_trials": target_completed_trials,
         "max_total_trials": max_total_trials,
-        "completed": sum(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials),
-        "pruned": sum(t.state == optuna.trial.TrialState.PRUNED for t in study.trials),
+        "completed": counts["complete"],
+        "running": counts["running"],
+        "pruned": counts["pruned"],
+        "failed": counts["failed"],
+        "waiting": counts["waiting"],
+        "attempted": counts["attempted"],
         "best_trial": best_trial.number if best_trial else None,
         "best_params": study.best_params if best_trial else {},
-        "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
+        "sampler": {"name": "TPESampler", "multivariate": True, "group": True, "constant_liar": True},
+        "hpo_fold_ids": [fold["fold"] for fold in folds],
     }
     _write(run_path / "hpo_summary.json", summary)
     _write(run_path / "hpo_summaries" / f"{_safe_filename(study.study_name)}_{summary['worker_id']}.json", summary)
@@ -570,48 +701,80 @@ def run_top5(
     cfg: dict[str, Any],
     root: str,
     run_dir: str,
-    graph_config_path: str,
     study_name: str | None = None,
     storage: str | None = None,
     allow_sqlite_storage: bool = False,
     study_prefix: str | None = None,
     variant: str = "full",
+    top_n: int = 3,
 ) -> dict[str, Any]:
     if optuna is None:
         raise RuntimeError("Optuna is required for the top5-reeval stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
-    graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
-    storage = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
+    storage_url = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
     requested_study_name = study_name or (
         f"{cfg['model']['name']}_{variant}" if variant != "full" else f"{cfg['model']['name']}_protocol"
     )
     study_name = _namespaced_study_name(run_path, requested_study_name, study_prefix)
-    study = optuna.load_study(study_name=study_name, storage=storage)
+    study = optuna.load_study(study_name=study_name, storage=storage_url)
     completed = sorted(
         (trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE),
         key=lambda trial: float(trial.value),
         reverse=True,
-    )[:5]
+    )[:top_n]
     rankings = []
     for trial in completed:
-        trial_cfg = apply_trial_params(cfg, trial.params, graph_config)
-        scores = [_score_config(trial_cfg, root, fold, trial.number) for fold in hpo_artifact["full_folds"]]
-        rankings.append({"trial_number": trial.number, "subset_value": trial.value, "full_scores": scores, "full_mean": float(np.mean(scores)), "params": trial.params})
+        trial_cfg = apply_trial_params(cfg, trial.params)
+        scores = [_score_config(trial_cfg, root, fold, trial.number) for fold in hpo_artifact["full_folds"][:3]]
+        graph_params = normalize_graph_params(trial.params)
+        rankings.append({
+            "trial_number": trial.number,
+            "subset_value": float(trial.value),
+            "reeval_scores": scores,
+            "reeval_mean": float(np.mean(scores)),
+            "reeval_std": float(np.std(scores)),
+            "full_scores": scores,
+            "full_mean": float(np.mean(scores)),
+            "params": trial.params,
+            "graph_params": graph_params,
+        })
     if not rankings:
-        raise RuntimeError("top-5 reevaluation requires at least one completed HPO trial")
-    winner = max(rankings, key=lambda item: item["full_mean"])
+        raise RuntimeError("top-3 reevaluation requires at least one completed HPO trial")
+    winner = max(
+        rankings,
+        key=lambda item: (
+            item["reeval_mean"],
+            -item["reeval_std"],
+            item["subset_value"],
+            -item["trial_number"],
+        ),
+    )
+    config_fingerprint = selected_config_fingerprint(
+        model_name=cfg["model"]["name"],
+        variant=variant,
+        params=winner["params"],
+        graph_params=winner["graph_params"],
+    )
     selected = {
         "trial_number": winner["trial_number"],
         "params": winner["params"],
-        "full_mean": winner["full_mean"],
-        "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
+        "graph_params": winner["graph_params"],
+        "config_fingerprint": config_fingerprint,
+        "hpo_subset_value": winner["subset_value"],
+        "reeval_scores": winner["reeval_scores"],
+        "reeval_mean": winner["reeval_mean"],
+        "reeval_std": winner["reeval_std"],
+        "full_mean": winner["reeval_mean"],
         "study_name": study.study_name,
         "requested_study_name": requested_study_name,
         "study_prefix": _resolve_study_prefix(run_path, study_prefix),
         "variant": variant,
         "model_name": cfg["model"]["name"],
+        "selection_rule": "max reeval_mean, then lower reeval_std, then higher hpo_subset_value, then lower trial_number",
     }
-    _write(run_path / "top5_reevaluation.json", {"rankings": rankings, "winner": selected})
+    payload = {"rankings": rankings, "winner": selected, "top_n": top_n, "reeval_fold_count": 3}
+    _write(run_path / "top3_reevaluation.json", payload)
+    _write(run_path / "top5_reevaluation.json", payload)
     _write(run_path / "selected_config.json", selected)
     if variant != "full":
         _write(run_path / f"selected_config_{_safe_filename(variant)}.json", selected)
@@ -653,7 +816,7 @@ def run_graph_pilot(
 
         def objective(trial: optuna.Trial):
             trial_cfg = copy.deepcopy(cfg)
-            trial_cfg.setdefault("train", {})["optimizer"] = "adamw"
+            trial_cfg.setdefault("train", {})["optimizer"] = "adam"
             trial_cfg["train"]["drop_last"] = True
             trial_cfg["train"]["eval_drop_last"] = False
             trial_cfg.setdefault("edge", {}).update({
@@ -739,7 +902,6 @@ def run_evaluation(
     cfg: dict[str, Any],
     root: str,
     run_dir: str,
-    graph_config_path: str,
     selected_config_path: str,
     *,
     eval_seeds: tuple[int, ...] | None = None,
@@ -748,10 +910,22 @@ def run_evaluation(
     write_summary: bool = True,
 ):
     run_path, eval_artifact, _ = _require_artifacts(run_dir)
-    graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
     selected = load_json(selected_config_path)
     _validate_selected_config_for_variant(selected, cfg, variant, selected_config_path)
-    selected_cfg = apply_trial_params(cfg, selected["params"], graph_config)
+    parent_cfg = _apply_selected_config(cfg, selected)
+    ablation_mutation = None
+    if variant == "full":
+        selected_cfg = parent_cfg
+    else:
+        selected_cfg = apply_variant(parent_cfg, variant)
+        ablation_mutation = validate_ablation_mutation(parent_cfg, selected_cfg, variant)
+    metadata = _evaluation_metadata(
+        cfg=cfg,
+        selected=selected,
+        selected_cfg=selected_cfg,
+        variant=variant,
+        ablation_mutation=ablation_mutation,
+    )
     results = []
     splits = _select_eval_splits(eval_artifact, eval_seeds, eval_split_ids)
 
@@ -769,16 +943,14 @@ def run_evaluation(
             model_seed=int(split["eval_seed"]),
             suppress_logger=True,
         )
-        results.append({"split_id": split["split_id"], "result": output})
+        results.append({"split_id": split["split_id"], "result": output, **metadata})
         _write(run_path / "evaluation" / f"{split['split_id']}.json", results[-1])
     if write_summary:
         _write(run_path / "evaluation_summary.json", {
             "count": len(results),
-            "variant": variant,
-            "model_name": cfg["model"]["name"],
             "eval_seeds": sorted({int(split["eval_seed"]) for split in splits}),
-            "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
             "results": results,
+            **metadata,
         })
     return results
 
@@ -786,14 +958,12 @@ def run_evaluation(
 def finalize_evaluation(
     cfg: dict[str, Any],
     run_dir: str,
-    graph_config_path: str,
     *,
     eval_seeds: tuple[int, ...] | None = None,
     eval_split_ids: tuple[str, ...] | None = None,
     variant: str = "full",
 ) -> dict[str, Any]:
     run_path, eval_artifact, _ = _require_artifacts(run_dir)
-    graph_config = load_graph_config(graph_config_path, model_name=cfg["model"]["name"])
     splits = _select_eval_splits(eval_artifact, eval_seeds, eval_split_ids)
     results = []
     missing = []
@@ -806,13 +976,29 @@ def finalize_evaluation(
         results.append(load_json(path))
     if missing:
         raise FileNotFoundError(f"missing evaluation split outputs: {missing}")
+    metadata_keys = {
+        "model_name",
+        "variant",
+        "selected_config_fingerprint",
+        "parent_config_fingerprint",
+        "effective_config_fingerprint",
+        "config_fingerprint",
+        "graph_config_fingerprint",
+        "graph_params",
+        "ablation_mutation",
+    }
+    metadata = {
+        key: results[0][key]
+        for key in metadata_keys
+        if results and key in results[0]
+    }
     summary = {
         "count": len(results),
         "variant": variant,
         "model_name": cfg["model"]["name"],
         "eval_seeds": sorted({int(split["eval_seed"]) for split in splits}),
-        "graph_config_fingerprint": graph_config["graph_config_fingerprint"],
         "results": results,
+        **metadata,
     }
     _write(run_path / "evaluation_summary.json", summary)
     return summary
@@ -840,9 +1026,12 @@ def main() -> None:
     parser.add_argument("--eval-split-id", action="append", default=[], help="Evaluation split_id(s) to run/finalize. Can be repeated or comma-separated.")
     parser.add_argument("--no-summary", action="store_true", help="For evaluate stages, write split files only and skip evaluation_summary.json.")
     parser.add_argument("--study-prefix", default=None, help="Namespace Optuna study names. Defaults to a stable hash of --run-dir.")
-    parser.add_argument("--max-total-trials", type=int, default=None, help="Shared Optuna trial budget for multi-worker HPO.")
+    parser.add_argument("--target-completed-trials", type=int, default=40, help="Target COMPLETE trials for joint HPO.")
+    parser.add_argument("--max-total-trials", type=int, default=80, help="Attempted-trial safety cap for multi-worker HPO.")
     parser.add_argument("--notify-trials", action="store_true", help="Send a Discord message after each HPO/edge-pilot trial.")
     parser.add_argument("--discord-bot-name", default="protocol_runner")
+    parser.add_argument("--heartbeat-interval", type=int, default=60, help="PostgreSQL Optuna heartbeat interval in seconds; <=0 disables it.")
+    parser.add_argument("--heartbeat-grace-period", type=int, default=180, help="PostgreSQL Optuna heartbeat grace period in seconds.")
     parser.add_argument(
         "--storage",
         default=None,
@@ -890,26 +1079,27 @@ def main() -> None:
             discord_bot_name=args.discord_bot_name,
         )
     elif args.stage == "hpo":
-        if not args.graph_config:
-            raise SystemExit("--graph-config is required for hpo")
         _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
         run_hpo(
             cfg,
             args.root,
             args.run_dir,
-            args.graph_config,
             args.n_trials,
             args.study_name,
+            warm_start_params=_load_warm_start_params(args.warm_start),
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
             study_prefix=args.study_prefix,
+            target_completed_trials=args.target_completed_trials,
             max_total_trials=args.max_total_trials,
             notify_trials=args.notify_trials,
             discord_bot_name=args.discord_bot_name,
+            heartbeat_interval=args.heartbeat_interval if args.heartbeat_interval > 0 else None,
+            heartbeat_grace_period=args.heartbeat_grace_period,
         )
     elif args.stage == "ablation-hpo":
-        if not args.graph_config or not args.variant or args.variant == "full":
-            raise SystemExit("--graph-config and a non-full --variant are required for ablation-hpo")
+        if not args.variant or args.variant == "full":
+            raise SystemExit("a non-full --variant is required for ablation-hpo")
         if not VARIANTS[args.variant].get("hpo", False):
             raise SystemExit(f"{args.variant} uses inherited HPO; run ablation-evaluate instead")
         if args.warm_start:
@@ -921,7 +1111,6 @@ def main() -> None:
             variant_cfg,
             args.root,
             args.run_dir,
-            args.graph_config,
             args.n_trials if args.n_trials != 100 else 40,
             args.study_name or f"{cfg['model']['name']}_{args.variant}",
             warm_start,
@@ -929,20 +1118,20 @@ def main() -> None:
             allow_sqlite_storage=args.allow_sqlite_storage,
             study_prefix=args.study_prefix,
             variant=args.variant,
+            target_completed_trials=args.target_completed_trials,
             max_total_trials=args.max_total_trials,
             notify_trials=args.notify_trials,
             discord_bot_name=args.discord_bot_name,
+            heartbeat_interval=args.heartbeat_interval if args.heartbeat_interval > 0 else None,
+            heartbeat_grace_period=args.heartbeat_grace_period,
         )
     elif args.stage == "top5-reeval":
-        if not args.graph_config:
-            raise SystemExit("--graph-config is required for top5-reeval")
         variant_cfg = _variant_cfg(cfg, args.variant)
         _ensure_protocol_codebook(variant_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
         run_top5(
             variant_cfg,
             args.root,
             args.run_dir,
-            args.graph_config,
             args.study_name,
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
@@ -950,14 +1139,13 @@ def main() -> None:
             variant=args.variant,
         )
     elif args.stage == "evaluate":
-        if not args.graph_config or not args.selected_config:
-            raise SystemExit("--graph-config and --selected-config are required for evaluate")
+        if not args.selected_config:
+            raise SystemExit("--selected-config is required for evaluate")
         _ensure_protocol_codebook(cfg, args.stage, args.root, args.run_dir)
         run_evaluation(
             cfg,
             args.root,
             args.run_dir,
-            args.graph_config,
             args.selected_config,
             eval_seeds=_parse_eval_seeds(args.eval_seeds),
             eval_split_ids=_parse_eval_split_ids(args.eval_split_id),
@@ -965,27 +1153,25 @@ def main() -> None:
             write_summary=not args.no_summary,
         )
     elif args.stage == "finalize-evaluate":
-        if not args.graph_config:
-            raise SystemExit("--graph-config is required for finalize-evaluate")
         variant_cfg = _variant_cfg(cfg, args.variant)
         finalize_evaluation(
             variant_cfg,
             args.run_dir,
-            args.graph_config,
             eval_seeds=_parse_eval_seeds(args.eval_seeds),
             eval_split_ids=_parse_eval_split_ids(args.eval_split_id),
             variant=args.variant,
         )
     elif args.stage == "ablation-evaluate":
-        if not args.graph_config or not args.selected_config or not args.variant or args.variant == "full":
-            raise SystemExit("--graph-config, --selected-config, and a non-full --variant are required")
+        if not args.selected_config or not args.variant or args.variant == "full":
+            raise SystemExit("--selected-config and a non-full --variant are required")
         variant_cfg = _variant_cfg(cfg, args.variant)
         _ensure_protocol_codebook(variant_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
+        cfg["codebook_path"] = variant_cfg["codebook_path"]
+        cfg.setdefault("data", {})["codebook_path"] = variant_cfg["codebook_path"]
         run_evaluation(
-            variant_cfg,
+            cfg,
             args.root,
             args.run_dir,
-            args.graph_config,
             args.selected_config,
             eval_seeds=_parse_eval_seeds(args.eval_seeds),
             eval_split_ids=_parse_eval_split_ids(args.eval_split_id),

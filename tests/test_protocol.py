@@ -8,10 +8,10 @@ import pytest
 import torch
 
 from src.protocol.artifacts import create_eval_artifact, create_hpo_artifact
-from src.protocol.ablations import VARIANTS, apply_variant
+from src.protocol.ablations import VARIANTS, apply_variant, validate_ablation_mutation
 from src.protocol.analysis import analyze_paired_results, build_paired_results
 from src.protocol.graph_config import load_graph_config, write_graph_config
-from src.protocol.hpo import apply_trial_params, suggest_protocol_params
+from src.protocol.hpo import apply_trial_params, normalize_graph_params, suggest_protocol_params
 from src.protocol.mi import compute_mi_dict, mi_cache_path
 from src.protocol.runner import (
     finalize_evaluation,
@@ -243,22 +243,31 @@ def test_variant_source_validation_blocks_wrong_base_model():
         _variant_cfg({"model": {"name": "gin", "params": {}}}, "xgboost_admission")
 
 
-def test_fairness_ablation_variants_require_independent_hpo():
-    for variant in ["w/o_gated_fusion", "w/o_mi_edge", "w/o_preprocessing"]:
-        assert VARIANTS[variant]["hpo"] is True
+def test_controlled_ablation_variants_inherit_full_selected_config():
+    for variant in ["A1", "A2", "A3", "w/o_gated_fusion", "w/o_mi_edge", "w/o_preprocessing"]:
+        assert VARIANTS[variant]["hpo"] is False
         _validate_selected_config_for_variant(
-            {"variant": variant, "model_name": "ctmp_gin", "params": {}},
+            {"variant": "full", "model_name": "ctmp_gin", "params": {}},
             {"model": {"name": "ctmp_gin"}},
             variant,
             "selected.json",
         )
-        with pytest.raises(ValueError, match="requires its own top5-selected config"):
-            _validate_selected_config_for_variant(
-                {"variant": "full", "model_name": "ctmp_gin", "params": {}},
-                {"model": {"name": "ctmp_gin"}},
-                variant,
-                "selected.json",
-            )
+
+
+def test_ablation_mutation_diff_is_whitelisted():
+    parent = {"model": {"params": {}}, "edge": {"is_mi_based": True}, "train": {"do_preprocess": True}}
+    effective = apply_variant(parent, "w/o_mi_edge")
+    report = validate_ablation_mutation(parent, effective, "w/o_mi_edge")
+    assert report["diffs"] == [{"path": "edge.is_mi_based", "before": True, "after": False}]
+    unexpected = json.loads(json.dumps(effective))
+    unexpected["train"]["batch_size"] = 512
+    with pytest.raises(ValueError, match="non-whitelisted"):
+        validate_ablation_mutation(parent, unexpected, "w/o_mi_edge")
+    a4_report = validate_ablation_mutation({"model": {"params": {}}}, apply_variant({"model": {"params": {}}}, "A4"), "A4")
+    assert {item["path"] for item in a4_report["diffs"]} == {
+        "evaluation.los_shuffle_repetitions",
+        "evaluation.use_los_shuffle_as_primary",
+    }
 
 
 def test_eval_seed_filter_selects_two_seed_ablation_plan(tmp_path):
@@ -301,12 +310,6 @@ def test_finalize_evaluation_writes_summary_and_rejects_missing_splits(tmp_path)
     eval_artifact = create_eval_artifact(labels, run_dir / "d_eval_split_artifact.json")
     hpo_idx = np.asarray(eval_artifact["d_hpo_idx"])
     create_hpo_artifact(labels[hpo_idx], run_dir / "d_hpo_split_artifact.json", base_indices=hpo_idx)
-    graph = write_graph_config(
-        str(tmp_path / "graph_config.json"),
-        {"score_method": "raw_mi", "threshold": 0.01, "top_k": 6, "pruning_ratio": 0.3},
-        {"artifact_fingerprint": "pilot123"},
-        model_name="ctmp_gin",
-    )
     split_ids = [split["split_id"] for split in eval_artifact["splits"][:2]]
     (run_dir / "evaluation").mkdir(parents=True)
     for index, split_id in enumerate(split_ids):
@@ -318,17 +321,14 @@ def test_finalize_evaluation_writes_summary_and_rejects_missing_splits(tmp_path)
     summary = finalize_evaluation(
         {"model": {"name": "ctmp_gin"}},
         str(run_dir),
-        str(tmp_path / "graph_config.json"),
         eval_split_ids=tuple(split_ids),
     )
     assert summary["count"] == 2
-    assert summary["graph_config_fingerprint"] == graph["graph_config_fingerprint"]
     assert json.loads((run_dir / "evaluation_summary.json").read_text(encoding="utf-8"))["count"] == 2
     with pytest.raises(FileNotFoundError, match="missing evaluation split outputs"):
         finalize_evaluation(
             {"model": {"name": "ctmp_gin"}},
             str(run_dir),
-            str(tmp_path / "graph_config.json"),
         )
 
 
@@ -391,7 +391,7 @@ def test_build_paired_results_from_evaluation_summaries(tmp_path):
     assert comparison["nb_test_train_ratio"] == pytest.approx(expected_n_test / expected_n_train)
 
 
-def test_build_paired_results_rejects_unpaired_splits_and_graph_mismatch(tmp_path):
+def test_build_paired_results_rejects_unpaired_splits_but_allows_graph_mismatch(tmp_path):
     split_artifact = create_eval_artifact(np.array([0, 1] * 100), tmp_path / "eval.json")
     split_ids = [split["split_id"] for split in split_artifact["splits"][:2]]
     candidate_path = tmp_path / "candidate.json"
@@ -414,11 +414,11 @@ def test_build_paired_results_rejects_unpaired_splits_and_graph_mismatch(tmp_pat
         "graph_config_fingerprint": "other_graph",
         "results": [{"split_id": split_id, "result": {"test_auc": 0.8}} for split_id in split_ids],
     }), encoding="utf-8")
-    with pytest.raises(ValueError, match="graph_config_fingerprint mismatch"):
-        build_paired_results(
-            [f"F1,ctmp_gin,a3tgcn,{candidate_path},{reference_path}"],
-            tmp_path / "eval.json",
-        )
+    paired = build_paired_results(
+        [f"F1,ctmp_gin,a3tgcn,{candidate_path},{reference_path}"],
+        tmp_path / "eval.json",
+    )
+    assert paired["comparisons"][0]["same_graph_config"] is False
 
 
 def test_build_paired_results_preserves_variable_split_sizes_for_nb_correction(tmp_path):
@@ -533,6 +533,23 @@ def test_xgboost_hpo_space_excludes_neural_common_params():
     assert "dropout_p" not in trial.params
     assert "batch_size" not in trial.params
     assert "optimizer" not in out["train"]
+
+
+def test_joint_hpo_graph_space_uses_conditional_threshold_names():
+    optuna = pytest.importorskip("optuna")
+    trial = optuna.create_study(direction="maximize").ask()
+    cfg = {"model": {"name": "ctmp_gin", "params": {}}, "train": {}, "edge": {}}
+    out = suggest_protocol_params(trial, cfg)
+    assert "n_neighbors" not in trial.params
+    assert "threshold" not in trial.params
+    assert trial.params["score_method"] in {"raw_mi", "nmi"}
+    active = "threshold_raw_mi" if trial.params["score_method"] == "raw_mi" else "threshold_nmi"
+    inactive = "threshold_nmi" if active == "threshold_raw_mi" else "threshold_raw_mi"
+    assert active in trial.params
+    assert inactive not in trial.params
+    graph = normalize_graph_params(trial.params)
+    assert out["edge"]["threshold"] == graph["threshold"]
+    assert out["train"]["optimizer"] == "adam"
 
 
 def test_apply_trial_params_preserves_fc_edge_ablation_and_a4_metadata():
