@@ -7,6 +7,7 @@ import json
 import os
 import re
 import socket
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -224,7 +225,7 @@ def _discord_trial_callback(
             f"gpu={os.environ.get('CUDA_VISIBLE_DEVICES', 'all')}"
         )
         if not send_discord_message(message, bot_name=bot_name):
-            raise RuntimeError("Discord notification failed for HPO trial")
+            print("Warning: Discord notification failed for HPO trial; continuing.", file=sys.stderr)
 
     return callback
 

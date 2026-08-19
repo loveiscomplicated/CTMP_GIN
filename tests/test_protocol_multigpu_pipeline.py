@@ -42,16 +42,46 @@ def test_discord_ready_sends_initial_message(monkeypatch) -> None:
     class Response:
         status_code = 204
         text = ""
+        headers = {}
 
     def fake_post(url, json, timeout):
         calls.append((url, json, timeout))
         return Response()
 
-    monkeypatch.setattr("scripts.protocol_multigpu_pipeline.requests.post", fake_post)
+    monkeypatch.setattr("src.utils.send_message.requests.post", fake_post)
     notifier = DiscordNotifier("https://discord.example/webhook", "test_bot", dry_run=False)
     notifier.require_ready()
     assert calls[0][1]["username"] == "test_bot"
     assert "[PIPELINE_READY]" in calls[0][1]["content"]
+
+
+def test_discord_rate_limit_is_retried(monkeypatch) -> None:
+    calls = []
+    sleeps = []
+
+    class Response:
+        headers = {}
+
+        def __init__(self, status_code: int, text: str) -> None:
+            self.status_code = status_code
+            self.text = text
+
+        def json(self):
+            return {"retry_after": 0.3}
+
+    def fake_post(url, json, timeout):
+        calls.append((url, json, timeout))
+        if len(calls) == 1:
+            return Response(429, '{"message": "You are being rate limited.", "retry_after": 0.3}')
+        return Response(204, "")
+
+    monkeypatch.setattr("src.utils.send_message.requests.post", fake_post)
+    monkeypatch.setattr("src.utils.send_message.time.sleep", lambda seconds: sleeps.append(seconds))
+    notifier = DiscordNotifier("https://discord.example/webhook", "test_bot", dry_run=False)
+
+    assert notifier.send("[JOB_START] test") is True
+    assert len(calls) == 2
+    assert sleeps == pytest.approx([0.4])
 
 
 def test_pipeline_defaults_exclude_xgboost_and_assign_one_visible_gpu(tmp_path, monkeypatch) -> None:

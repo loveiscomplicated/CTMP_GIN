@@ -14,8 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import requests
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -23,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.protocol.ablations import VARIANTS
 from src.protocol.constants import EVAL_FOLDS, EVAL_SEEDS
 from src.protocol.runner import _namespaced_study_name
+from src.utils.send_message import post_discord_message
 
 try:
     import optuna
@@ -203,21 +202,17 @@ class DiscordNotifier:
             return
         self.send("[PIPELINE_READY] Discord notification check passed")
 
-    def send(self, message: str) -> None:
+    def send(self, message: str) -> bool:
         print(message, flush=True)
         if self.dry_run:
-            return
+            return True
         if not self.webhook_url:
             raise RuntimeError("DISCORD_WEBHOOK_URL is required")
-        response = requests.post(
+        return post_discord_message(
             self.webhook_url,
-            json={"content": message, "username": self.bot_name},
-            timeout=15,
+            message,
+            self.bot_name,
         )
-        if response.status_code != 204:
-            raise RuntimeError(
-                f"Discord notification failed: status={response.status_code} body={response.text}"
-            )
 
 
 class ProtocolPipeline:
