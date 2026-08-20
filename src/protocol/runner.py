@@ -41,11 +41,17 @@ DATA_STAGES = {
     "prepare",
     "edge-pilot",
     "hpo",
+    "top5-plan",
+    "top5-score",
     "top5-reeval",
     "evaluate",
     "ablation-hpo",
     "ablation-evaluate",
 }
+
+TOP_REEVAL_FOLD_COUNT = 3
+TOP_REEVAL_MANIFEST = "top5_reevaluation_manifest.json"
+TOP_REEVAL_SCORE_DIR = "top5_reevaluation_scores"
 
 CTMP_VARIANTS = {
     "A1",
@@ -698,9 +704,110 @@ def run_hpo(
     return study
 
 
-def run_top5(
+def top5_manifest_path(run_dir: str | Path) -> Path:
+    return Path(run_dir) / TOP_REEVAL_MANIFEST
+
+
+def top5_score_path(run_dir: str | Path, trial_number: int, fold_index: int) -> Path:
+    return (
+        Path(run_dir)
+        / TOP_REEVAL_SCORE_DIR
+        / f"trial_{int(trial_number):04d}_fold_{int(fold_index):02d}.json"
+    )
+
+
+def _top5_manifest_fingerprint(manifest: dict[str, Any]) -> str:
+    payload = copy.deepcopy(manifest)
+    payload.pop("manifest_fingerprint", None)
+    return _config_fingerprint(payload)
+
+
+def _load_top5_manifest(run_path: Path, cfg: dict[str, Any] | None = None, variant: str | None = None) -> dict[str, Any]:
+    manifest = load_json(top5_manifest_path(run_path))
+    if manifest.get("artifact_type") != "top5_reevaluation_manifest":
+        raise ValueError(f"invalid top5 manifest: {top5_manifest_path(run_path)}")
+    expected_fingerprint = _top5_manifest_fingerprint(manifest)
+    actual_fingerprint = manifest.get("manifest_fingerprint")
+    if actual_fingerprint and actual_fingerprint != expected_fingerprint:
+        raise ValueError(f"top5 manifest fingerprint mismatch: {top5_manifest_path(run_path)}")
+    if cfg is not None:
+        expected_model = cfg.get("model", {}).get("name")
+        if manifest.get("model_name") != expected_model:
+            raise ValueError(
+                f"top5 manifest was created for model {manifest.get('model_name')!r}, "
+                f"but current config uses {expected_model!r}"
+            )
+    if variant is not None and manifest.get("variant", "full") != variant:
+        raise ValueError(
+            f"top5 manifest was created for variant {manifest.get('variant', 'full')!r}, "
+            f"but current variant is {variant!r}"
+        )
+    if not manifest.get("candidate_trials"):
+        raise ValueError("top5 manifest has no candidate trials")
+    return manifest
+
+
+def _top5_candidate(manifest: dict[str, Any], trial_number: int) -> dict[str, Any]:
+    for candidate in manifest.get("candidate_trials", []):
+        if int(candidate["trial_number"]) == int(trial_number):
+            return candidate
+    raise ValueError(f"trial {trial_number} is not in the top5 reevaluation manifest")
+
+
+def _load_top5_score(
+    run_dir: str | Path,
+    manifest: dict[str, Any],
+    trial_number: int,
+    fold_index: int,
+) -> dict[str, Any] | None:
+    path = top5_score_path(run_dir, trial_number, fold_index)
+    if not path.exists() or path.stat().st_size <= 0:
+        return None
+    try:
+        payload = load_json(path)
+    except Exception:
+        return None
+    expected_fingerprint = manifest.get("manifest_fingerprint") or _top5_manifest_fingerprint(manifest)
+    if payload.get("artifact_type") != "top5_reevaluation_score":
+        return None
+    if payload.get("manifest_fingerprint") != expected_fingerprint:
+        return None
+    if int(payload.get("trial_number", -1)) != int(trial_number):
+        return None
+    if int(payload.get("fold_index", -1)) != int(fold_index):
+        return None
+    try:
+        if not np.isfinite(float(payload["score"])):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    return payload
+
+
+def top5_score_complete(
+    run_dir: str | Path,
+    manifest: dict[str, Any],
+    trial_number: int,
+    fold_index: int,
+) -> bool:
+    return _load_top5_score(run_dir, manifest, trial_number, fold_index) is not None
+
+
+def top5_pending_scores(run_dir: str | Path) -> list[dict[str, int]]:
+    run_path = Path(run_dir)
+    manifest = _load_top5_manifest(run_path)
+    pending = []
+    fold_count = int(manifest["reeval_fold_count"])
+    for candidate in manifest["candidate_trials"]:
+        trial_number = int(candidate["trial_number"])
+        for fold_index in range(fold_count):
+            if not top5_score_complete(run_path, manifest, trial_number, fold_index):
+                pending.append({"trial_number": trial_number, "fold_index": fold_index})
+    return pending
+
+
+def prepare_top5_reevaluation(
     cfg: dict[str, Any],
-    root: str,
     run_dir: str,
     study_name: str | None = None,
     storage: str | None = None,
@@ -712,6 +819,15 @@ def run_top5(
     if optuna is None:
         raise RuntimeError("Optuna is required for the top5-reeval stage; install requirements.txt")
     run_path, _, hpo_artifact = _require_artifacts(run_dir)
+    manifest_path = top5_manifest_path(run_path)
+    if manifest_path.exists():
+        manifest = _load_top5_manifest(run_path, cfg, variant)
+        if int(manifest["top_n"]) != int(top_n):
+            raise ValueError(
+                f"existing top5 manifest uses top_n={manifest['top_n']}, requested top_n={top_n}"
+            )
+        return manifest
+
     storage_url = _resolve_optuna_storage(run_path, storage, allow_sqlite_storage=allow_sqlite_storage)
     requested_study_name = study_name or (
         f"{cfg['model']['name']}_{variant}" if variant != "full" else f"{cfg['model']['name']}_protocol"
@@ -723,24 +839,121 @@ def run_top5(
         key=lambda trial: float(trial.value),
         reverse=True,
     )[:top_n]
+    if not completed:
+        raise RuntimeError("top-3 reevaluation requires at least one completed HPO trial")
+
+    folds = hpo_artifact["full_folds"][:TOP_REEVAL_FOLD_COUNT]
+    manifest = {
+        "artifact_type": "top5_reevaluation_manifest",
+        "model_name": cfg["model"]["name"],
+        "variant": variant,
+        "study_name": study.study_name,
+        "requested_study_name": requested_study_name,
+        "study_prefix": _resolve_study_prefix(run_path, study_prefix),
+        "storage_backend": _storage_backend(storage_url),
+        "storage": _redact_storage(storage_url),
+        "top_n": int(top_n),
+        "reeval_fold_count": len(folds),
+        "fold_indices": list(range(len(folds))),
+        "fold_ids": [int(fold["fold"]) for fold in folds],
+        "hpo_artifact_fingerprint": hpo_artifact.get("artifact_fingerprint"),
+        "candidate_trials": [
+            {
+                "trial_number": int(trial.number),
+                "subset_value": float(trial.value),
+                "params": dict(trial.params),
+                "graph_params": normalize_graph_params(trial.params),
+            }
+            for trial in completed
+        ],
+        "selection_rule": "max reeval_mean, then lower reeval_std, then higher hpo_subset_value, then lower trial_number",
+    }
+    manifest["manifest_fingerprint"] = _top5_manifest_fingerprint(manifest)
+    _write(manifest_path, manifest)
+    return manifest
+
+
+def run_top5_score(
+    cfg: dict[str, Any],
+    root: str,
+    run_dir: str,
+    trial_number: int,
+    fold_index: int,
+    *,
+    variant: str = "full",
+) -> dict[str, Any]:
+    run_path, _, hpo_artifact = _require_artifacts(run_dir)
+    manifest = _load_top5_manifest(run_path, cfg, variant)
+    existing = _load_top5_score(run_path, manifest, trial_number, fold_index)
+    if existing is not None:
+        return existing
+
+    fold_count = int(manifest["reeval_fold_count"])
+    if fold_index < 0 or fold_index >= fold_count:
+        raise ValueError(f"fold_index must be in [0, {fold_count}), got {fold_index}")
+    candidate = _top5_candidate(manifest, trial_number)
+    folds = hpo_artifact["full_folds"][:fold_count]
+    if len(folds) < fold_count:
+        raise ValueError(f"expected {fold_count} top5 reevaluation folds, found {len(folds)}")
+    fold_info = folds[fold_index]
+    trial_cfg = apply_trial_params(cfg, candidate["params"], candidate["graph_params"])
+    score = _score_config(trial_cfg, root, fold_info, int(trial_number))
+    if not np.isfinite(float(score)):
+        raise RuntimeError(f"top5 reevaluation produced a non-finite score for trial={trial_number} fold={fold_index}")
+    payload = {
+        "artifact_type": "top5_reevaluation_score",
+        "manifest_fingerprint": manifest["manifest_fingerprint"],
+        "model_name": manifest["model_name"],
+        "variant": manifest["variant"],
+        "trial_number": int(trial_number),
+        "fold_index": int(fold_index),
+        "fold_id": int(fold_info["fold"]),
+        "score": float(score),
+        "params": candidate["params"],
+        "graph_params": candidate["graph_params"],
+    }
+    _write(top5_score_path(run_path, trial_number, fold_index), payload)
+    return payload
+
+
+def finalize_top5_reevaluation(
+    cfg: dict[str, Any],
+    run_dir: str,
+    *,
+    variant: str = "full",
+) -> dict[str, Any]:
+    run_path, _, _ = _require_artifacts(run_dir)
+    manifest = _load_top5_manifest(run_path, cfg, variant)
     rankings = []
-    for trial in completed:
-        trial_cfg = apply_trial_params(cfg, trial.params)
-        scores = [_score_config(trial_cfg, root, fold, trial.number) for fold in hpo_artifact["full_folds"][:3]]
-        graph_params = normalize_graph_params(trial.params)
+    missing = []
+    fold_count = int(manifest["reeval_fold_count"])
+    for candidate in manifest["candidate_trials"]:
+        trial_number = int(candidate["trial_number"])
+        scores = []
+        for fold_index in range(fold_count):
+            score_payload = _load_top5_score(run_path, manifest, trial_number, fold_index)
+            if score_payload is None:
+                missing.append(f"trial={trial_number} fold_index={fold_index}")
+                continue
+            scores.append(float(score_payload["score"]))
+        if len(scores) != fold_count:
+            continue
         rankings.append({
-            "trial_number": trial.number,
-            "subset_value": float(trial.value),
+            "trial_number": trial_number,
+            "subset_value": float(candidate["subset_value"]),
             "reeval_scores": scores,
             "reeval_mean": float(np.mean(scores)),
             "reeval_std": float(np.std(scores)),
             "full_scores": scores,
             "full_mean": float(np.mean(scores)),
-            "params": trial.params,
-            "graph_params": graph_params,
+            "params": candidate["params"],
+            "graph_params": candidate["graph_params"],
         })
+    if missing:
+        raise FileNotFoundError(f"missing top5 reevaluation score outputs: {missing}")
     if not rankings:
         raise RuntimeError("top-3 reevaluation requires at least one completed HPO trial")
+
     winner = max(
         rankings,
         key=lambda item: (
@@ -766,20 +979,59 @@ def run_top5(
         "reeval_mean": winner["reeval_mean"],
         "reeval_std": winner["reeval_std"],
         "full_mean": winner["reeval_mean"],
-        "study_name": study.study_name,
-        "requested_study_name": requested_study_name,
-        "study_prefix": _resolve_study_prefix(run_path, study_prefix),
+        "study_name": manifest["study_name"],
+        "requested_study_name": manifest["requested_study_name"],
+        "study_prefix": manifest["study_prefix"],
         "variant": variant,
         "model_name": cfg["model"]["name"],
-        "selection_rule": "max reeval_mean, then lower reeval_std, then higher hpo_subset_value, then lower trial_number",
+        "selection_rule": manifest["selection_rule"],
     }
-    payload = {"rankings": rankings, "winner": selected, "top_n": top_n, "reeval_fold_count": 3}
+    payload = {
+        "rankings": rankings,
+        "winner": selected,
+        "top_n": manifest["top_n"],
+        "reeval_fold_count": fold_count,
+        "manifest_fingerprint": manifest["manifest_fingerprint"],
+    }
     _write(run_path / "top3_reevaluation.json", payload)
     _write(run_path / "top5_reevaluation.json", payload)
     _write(run_path / "selected_config.json", selected)
     if variant != "full":
         _write(run_path / f"selected_config_{_safe_filename(variant)}.json", selected)
     return selected
+
+
+def run_top5(
+    cfg: dict[str, Any],
+    root: str,
+    run_dir: str,
+    study_name: str | None = None,
+    storage: str | None = None,
+    allow_sqlite_storage: bool = False,
+    study_prefix: str | None = None,
+    variant: str = "full",
+    top_n: int = 3,
+) -> dict[str, Any]:
+    prepare_top5_reevaluation(
+        cfg,
+        run_dir,
+        study_name,
+        storage=storage,
+        allow_sqlite_storage=allow_sqlite_storage,
+        study_prefix=study_prefix,
+        variant=variant,
+        top_n=top_n,
+    )
+    for item in top5_pending_scores(run_dir):
+        run_top5_score(
+            cfg,
+            root,
+            run_dir,
+            item["trial_number"],
+            item["fold_index"],
+            variant=variant,
+        )
+    return finalize_top5_reevaluation(cfg, run_dir, variant=variant)
 
 
 def run_graph_pilot(
@@ -1007,7 +1259,7 @@ def finalize_evaluation(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="CTMP-GIN reproducible protocol runner")
-    parser.add_argument("--stage", required=True, choices=["preflight", "prepare", "edge-pilot", "hpo", "top5-reeval", "evaluate", "finalize-evaluate", "ablation-hpo", "ablation-evaluate", "pair-results", "analyze"])
+    parser.add_argument("--stage", required=True, choices=["preflight", "prepare", "edge-pilot", "hpo", "top5-plan", "top5-score", "top5-reeval", "evaluate", "finalize-evaluate", "ablation-hpo", "ablation-evaluate", "pair-results", "analyze"])
     parser.add_argument("--config", default=None)
     parser.add_argument("--root", default=None)
     parser.add_argument("--run-dir", required=True)
@@ -1026,6 +1278,10 @@ def main() -> None:
     parser.add_argument("--eval-seeds", default=None, help="Comma-separated eval seeds to run, e.g. '1,2'. Defaults to all artifact seeds.")
     parser.add_argument("--eval-split-id", action="append", default=[], help="Evaluation split_id(s) to run/finalize. Can be repeated or comma-separated.")
     parser.add_argument("--no-summary", action="store_true", help="For evaluate stages, write split files only and skip evaluation_summary.json.")
+    parser.add_argument("--top-n", type=int, default=3, help="Number of completed HPO trials to re-evaluate.")
+    parser.add_argument("--reeval-trial-number", type=int, default=None, help="Top re-evaluation trial number for top5-score.")
+    parser.add_argument("--reeval-fold-index", type=int, default=None, help="Top re-evaluation fold index for top5-score.")
+    parser.add_argument("--finalize-only", action="store_true", help="For top5-reeval, only finalize existing score artifacts.")
     parser.add_argument("--study-prefix", default=None, help="Namespace Optuna study names. Defaults to a stable hash of --run-dir.")
     parser.add_argument("--target-completed-trials", type=int, default=40, help="Target COMPLETE trials for joint HPO.")
     parser.add_argument("--max-total-trials", type=int, default=80, help="Attempted-trial safety cap for multi-worker HPO.")
@@ -1126,19 +1382,49 @@ def main() -> None:
             heartbeat_interval=args.heartbeat_interval if args.heartbeat_interval > 0 else None,
             heartbeat_grace_period=args.heartbeat_grace_period,
         )
-    elif args.stage == "top5-reeval":
+    elif args.stage == "top5-plan":
         variant_cfg = _variant_cfg(cfg, args.variant)
         _ensure_protocol_codebook(variant_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
-        run_top5(
+        prepare_top5_reevaluation(
             variant_cfg,
-            args.root,
             args.run_dir,
             args.study_name,
             storage=args.storage,
             allow_sqlite_storage=args.allow_sqlite_storage,
             study_prefix=args.study_prefix,
             variant=args.variant,
+            top_n=args.top_n,
         )
+    elif args.stage == "top5-score":
+        if args.reeval_trial_number is None or args.reeval_fold_index is None:
+            raise SystemExit("--reeval-trial-number and --reeval-fold-index are required for top5-score")
+        variant_cfg = _variant_cfg(cfg, args.variant)
+        _ensure_protocol_codebook(variant_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
+        run_top5_score(
+            variant_cfg,
+            args.root,
+            args.run_dir,
+            args.reeval_trial_number,
+            args.reeval_fold_index,
+            variant=args.variant,
+        )
+    elif args.stage == "top5-reeval":
+        variant_cfg = _variant_cfg(cfg, args.variant)
+        _ensure_protocol_codebook(variant_cfg, args.stage, args.root, args.run_dir, variant=args.variant)
+        if args.finalize_only:
+            finalize_top5_reevaluation(variant_cfg, args.run_dir, variant=args.variant)
+        else:
+            run_top5(
+                variant_cfg,
+                args.root,
+                args.run_dir,
+                args.study_name,
+                storage=args.storage,
+                allow_sqlite_storage=args.allow_sqlite_storage,
+                study_prefix=args.study_prefix,
+                variant=args.variant,
+                top_n=args.top_n,
+            )
     elif args.stage == "evaluate":
         if not args.selected_config:
             raise SystemExit("--selected-config is required for evaluate")

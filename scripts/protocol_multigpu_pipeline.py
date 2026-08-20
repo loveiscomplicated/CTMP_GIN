@@ -20,7 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.protocol.ablations import VARIANTS
 from src.protocol.constants import EVAL_FOLDS, EVAL_SEEDS
-from src.protocol.runner import _namespaced_study_name
+from src.protocol.runner import _namespaced_study_name, top5_pending_scores
 from src.utils.send_message import post_discord_message
 
 try:
@@ -591,13 +591,56 @@ class ProtocolPipeline:
                 ),
                 gpu=self.gpus[0],
             )
+        if self.dry_run:
+            for ctx in pending_contexts:
+                self.run_command(
+                    f"{ctx.label} top5-reeval",
+                    self.runner_cmd(
+                        "top5-reeval",
+                        ctx,
+                        "--storage",
+                        self.storage,
+                    ),
+                    gpu=self.gpus[0],
+                )
+            return
+
+        for ctx in pending_contexts:
             self.run_command(
-                f"{ctx.label} top5-reeval",
+                f"{ctx.label} top5-plan",
                 self.runner_cmd(
-                    "top5-reeval",
+                    "top5-plan",
                     ctx,
                     "--storage",
                     self.storage,
+                ),
+                gpu=self.gpus[0],
+            )
+        jobs = []
+        for ctx in pending_contexts:
+            for item in top5_pending_scores(ctx.run_dir):
+                jobs.append(Job(
+                    name=(
+                        f"{ctx.label} top5-score "
+                        f"trial{item['trial_number']}_fold{item['fold_index']}"
+                    ),
+                    cmd=self.runner_cmd(
+                        "top5-score",
+                        ctx,
+                        "--reeval-trial-number",
+                        item["trial_number"],
+                        "--reeval-fold-index",
+                        item["fold_index"],
+                    ),
+                ))
+        self.run_parallel("ablation top5-score" if ablation else "main top5-score", jobs)
+        for ctx in pending_contexts:
+            self.run_command(
+                f"{ctx.label} top5-finalize",
+                self.runner_cmd(
+                    "top5-reeval",
+                    ctx,
+                    "--finalize-only",
                 ),
                 gpu=self.gpus[0],
             )

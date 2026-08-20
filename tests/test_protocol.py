@@ -15,6 +15,7 @@ from src.protocol.hpo import apply_trial_params, normalize_graph_params, suggest
 from src.protocol.mi import compute_mi_dict, mi_cache_path
 from src.protocol.runner import (
     finalize_evaluation,
+    finalize_top5_reevaluation,
     _namespaced_study_name,
     _optimize_study,
     _parse_eval_split_ids,
@@ -27,6 +28,9 @@ from src.protocol.runner import (
     _storage_backend,
     _validate_selected_config_for_variant,
     _variant_cfg,
+    prepare_top5_reevaluation,
+    run_top5_score,
+    top5_pending_scores,
 )
 from src.protocol.stats import bh_fdr_adjust, holm_adjust, nadeau_bengio_corrected_t, tost
 from src.protocol.vocabulary import encode_with_codebook, load_codebook, write_codebook_from_csv
@@ -302,6 +306,63 @@ def test_optimize_study_respects_shared_trial_budget():
     assert len(study.trials) == 2
     _optimize_study(study, objective, n_trials=5, max_total_trials=2)
     assert len(study.trials) == 2
+
+
+def test_top5_reevaluation_scores_are_resume_safe(tmp_path, monkeypatch):
+    optuna = pytest.importorskip("optuna")
+    labels = np.array([0, 1] * 200)
+    run_dir = tmp_path / "run"
+    eval_artifact = create_eval_artifact(labels, run_dir / "d_eval_split_artifact.json")
+    hpo_idx = np.asarray(eval_artifact["d_hpo_idx"])
+    create_hpo_artifact(labels[hpo_idx], run_dir / "d_hpo_split_artifact.json", base_indices=hpo_idx)
+
+    storage = f"sqlite:///{tmp_path / 'optuna.db'}"
+    study = optuna.create_study(
+        study_name=_namespaced_study_name(run_dir, "gin_protocol"),
+        storage=storage,
+        direction="maximize",
+    )
+    values = [0.70, 0.95, 0.90]
+    study.optimize(lambda trial: values[trial.number], n_trials=len(values))
+
+    cfg = {"model": {"name": "gin", "params": {}}, "edge": {"is_mi_based": True}, "train": {}}
+    manifest = prepare_top5_reevaluation(
+        cfg,
+        str(run_dir),
+        storage=storage,
+        allow_sqlite_storage=True,
+        top_n=2,
+    )
+
+    assert [item["trial_number"] for item in manifest["candidate_trials"]] == [1, 2]
+    assert len(top5_pending_scores(run_dir)) == 6
+
+    calls = []
+
+    def fake_score(cfg, root, fold_info, trial_number):
+        calls.append((trial_number, int(fold_info["fold"])))
+        return 0.80 + trial_number * 0.01 + int(fold_info["fold"]) * 0.001
+
+    monkeypatch.setattr(protocol_runner, "_score_config", fake_score)
+
+    run_top5_score(cfg, str(tmp_path / "data"), str(run_dir), 1, 0)
+    assert len(top5_pending_scores(run_dir)) == 5
+    run_top5_score(cfg, str(tmp_path / "data"), str(run_dir), 1, 0)
+    assert calls == [(1, 0)]
+
+    for item in top5_pending_scores(run_dir):
+        run_top5_score(
+            cfg,
+            str(tmp_path / "data"),
+            str(run_dir),
+            item["trial_number"],
+            item["fold_index"],
+        )
+
+    selected = finalize_top5_reevaluation(cfg, str(run_dir))
+    assert selected["trial_number"] == 2
+    assert top5_pending_scores(run_dir) == []
+    assert (run_dir / "selected_config.json").exists()
 
 
 def test_finalize_evaluation_writes_summary_and_rejects_missing_splits(tmp_path):
